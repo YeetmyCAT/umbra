@@ -81,6 +81,8 @@
     <label class="row">Label satellites brighter than <input type="range" id="sLabelMag" min="0" max="9" step="0.5" value="4"> <span id="sLabelMagV">4</span></label>
     <label class="row">Brightness <input type="range" id="sEv" min="-3" max="3" step="0.25" value="0"> <span id="sEvV">0</span> EV</label>
     <label class="row"><input type="checkbox" id="sAurora" checked> Aurora in the satellite view</label>
+    <label class="row">Sensor compass correction <input type="range" id="sCal" min="-45" max="45" step="0.5" value="0"> <span id="sCalV">0°</span> <button class="btn" id="sCal0">Reset</button></label>
+    <div class="note">If the sensor view is turned left or right of the real sky, slide until the Moon or a bright star lines up. Phone compasses point to magnetic north and are disturbed by nearby metal.</div>
     <div class="note" id="catInfo"></div>
     <button id="sRefresh" class="btn">Check for newer orbital elements</button>
     <div class="note">Orbits: CelesTrak GP/OMM (SGP4/SDP4). Brightness: facet models of each spacecraft's real shape and attitude, Earth's shadow with penumbra and atmospheric reddening, earthshine. Stars: Yale BSC, Hipparcos/Tycho and Gaia DR3. Sky: SkyScout atmosphere model.</div>

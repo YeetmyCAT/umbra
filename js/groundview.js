@@ -3,7 +3,7 @@
 // a real-size 3D model once the zoom makes it more than a pixel or two across.
 import * as THREE from '../vendor/three.module.min.js';
 import { makeSkyLUT, makeSkyBackground, makeStars, makePlanets, makeMoon, makeMoonGlare, milkyWayPhoto, makeFaintStars, makeGaiaStars, starMaterial } from './sky.js';
-import { refrUniform } from './glsl.js';
+import { refrUniform, COMMON } from './glsl.js';
 import { sunMoon, planets as planetPos, altAzToVec, eqjToWorld, observer as astroObserver, EQ2GAL, OBLIQ, refraction } from './astro.js';
 import { buildModel, poseModel, disposeModel } from './models3d.js';
 import { mulM3, DEG } from './frames.js';
@@ -42,18 +42,38 @@ export class GroundView {
     this.planets = makePlanets(U); S.add(this.planets);
     this.moon = makeMoon(U); S.add(this.moon);
     this.glare = makeMoonGlare(U); S.add(this.glare);
-    // ground below the horizon: dark land lit by the sky (no landscape)
+    // ground: a flat grass field to a true 0 deg horizon, lit by the Sun, the Moon and the sky, fading into haze
     const gmat = new THREE.ShaderMaterial({
-      uniforms: U, depthWrite: false,
+      uniforms: U, depthWrite: false, side: THREE.BackSide,   // seen from inside the half-sphere
       vertexShader: `out vec3 vD; void main(){ vD = position; vec4 p = projectionMatrix * viewMatrix * vec4(position + cameraPosition, 1.0); gl_Position = p.xyww; }`,
-      fragmentShader: `in vec3 vD; uniform sampler2D uSkyLUT; uniform float uExposure; uniform vec3 uSunDir, uSunE, uMoonDir, uMoonE;
-        void main(){ vec3 d = normalize(vD); if (d.y > -0.0005) discard;
-          vec3 E = uSunE*max(uSunDir.y, 0.0)*0.6 + uMoonE*max(uMoonDir.y, 0.0)*0.6 + vec3(2.0e-4);
-          vec3 c = vec3(0.07, 0.075, 0.06)/3.14159*E*uExposure;
-          // haze toward the horizon line
-          float k = exp(-(-d.y)*40.0);
-          vec3 sky = texture(uSkyLUT, vec2(atan(d.x, -d.z)/6.28318 + 0.5, 0.5)).rgb;
-          gl_FragColor = vec4(min(mix(c, sky*0.6, k), vec3(3.0e4)), 1.0); }`,
+      fragmentShader: COMMON + `in vec3 vD;
+        float gn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0 - 2.0*f); return mix(mix(hash12(i), hash12(i + vec2(1,0)), f.x), mix(hash12(i + vec2(0,1)), hash12(i + vec2(1,1)), f.x), f.y); }
+        void main(){
+          vec3 d = normalize(vD); if (d.y > 0.0) discard;
+          float dist = 1.7/max(-d.y, 1e-5);
+          vec2 P = d.xz*dist;
+          float fw = length(fwidth(P));
+          // grass at several scales; scales finer than a pixel fade to their average (no shimmer)
+          float g = 0.5, amp = 0.5, sc = 0.03, tot = 0.0;
+          for (int i = 0; i < 6; i++) {
+            float vis = 1.0 - smoothstep(0.3, 1.0, fw*2.0/sc);
+            g += (gn(P/sc + float(i)*17.3) - 0.5)*amp*vis; tot += amp; sc *= 3.1; amp *= 0.8;
+          }
+          float patches = gn(P/40.0)*0.6 + gn(P/9.0)*0.4;
+          vec3 alb = mix(vec3(0.030, 0.055, 0.016), vec3(0.075, 0.095, 0.032), clamp(g + 0.35*(patches - 0.5), 0.0, 1.0));   // grass
+          alb = mix(alb, vec3(0.10, 0.09, 0.05), smoothstep(0.62, 0.8, patches)*0.4);                                        // drier patches
+          // light: direct Sun and Moon (through the air), skylight from the whole dome
+          vec3 Ed = (uSunE*max(uSunDir.y, 0.0)*directT(uSunDir.y) + uMoonE*max(uMoonDir.y, 0.0)*directT(uMoonDir.y))*uExposure;
+          // skylight: the dome averaged (zenith and four directions 30 deg up), so the Sun's glow counts only its share
+          vec2 sa = normalize(vec2(uSunDir.x, uSunDir.z) + 1e-5);
+          vec3 sky = (skyL(vec3(0.0, 1.0, 0.0)) + skyL(vec3(sa.x*0.866, 0.5, sa.y*0.866)) + skyL(vec3(-sa.x*0.866, 0.5, -sa.y*0.866))
+                    + skyL(vec3(-sa.y*0.866, 0.5, sa.x*0.866)) + skyL(vec3(sa.y*0.866, 0.5, -sa.x*0.866)))*0.2;
+          vec3 c = alb/PI*Ed + alb*sky;
+          // aerial perspective: blend toward the sky just above the horizon with distance
+          vec3 hz = skyL(normalize(vec3(d.x, 0.002, d.z)));
+          float k = 1.0 - exp(-dist/12000.0);
+          gl_FragColor = vec4(min(mix(c, hz, k), vec3(3.0e4)), 1.0);
+        }`,
     });
     const gm = new THREE.Mesh(new THREE.SphereGeometry(1000, 48, 24, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), gmat); gm.frustumCulled = false; gm.renderOrder = 50; S.add(gm);
     // satellites: compacted list of what is above the horizon and sunlit, updated each frame
@@ -126,9 +146,13 @@ export class GroundView {
     if (this.lock && sel >= 0 && !app.gyro.on && T.alt[sel] > -5) {
       const d = new THREE.Vector3(T.dir[sel * 3], T.dir[sel * 3 + 1], T.dir[sel * 3 + 2]);
       const yaw = Math.atan2(d.x, -d.z) / DEG, pitch = Math.asin(clamp(d.y, -1, 1)) / DEG;
-      const k = 1 - Math.exp(-dt * 8);
-      let dy = ((yaw - this.yaw + 540) % 360) - 180; this.yaw = (this.yaw + dy * k + 360) % 360; this.pitch += (pitch + refraction(pitch, refrUniform.value) - this.pitch) * k;
+      const tp = pitch + refraction(pitch, refrUniform.value);
+      let dy = ((yaw - this.yaw + 540) % 360) - 180, dp = tp - this.pitch;
+      // swing over to it when first locked, then stay exactly on it at any time rate
+      if (!this.locked || Math.hypot(dy * Math.cos(tp * DEG), dp) > 2) { const k = 1 - Math.exp(-dt * 8); this.yaw = (this.yaw + dy * k + 360) % 360; this.pitch += dp * k; this.locked = Math.hypot(dy * Math.cos(tp * DEG), dp) < 0.5; }
+      else { this.yaw = (yaw + 360) % 360; this.pitch = tp; }
     }
+    if (!this.lock) this.locked = false;
     cam.fov = this.fov; cam.aspect = w / h; cam.updateProjectionMatrix();
     if (app.gyro.on && app.gyro.q) { cam.quaternion.copy(app.gyro.q); const f = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion); this.yaw = (Math.atan2(f.x, -f.z) / DEG + 360) % 360; this.pitch = Math.asin(clamp(f.y, -1, 1)) / DEG; }
     else cam.rotation.set(this.pitch * DEG, -this.yaw * DEG, 0);
@@ -140,8 +164,17 @@ export class GroundView {
     if (!isFinite(this.adaptL) || this.adaptL <= 0) this.adaptL = La;
     let E = 0.0922 / Math.pow(this.adaptL, 0.72) * Math.pow(2, this.ev);
     E *= lerp(1, 0.4, smooth(0, -3.3, Math.log10(this.adaptL)));
+    // zoomed onto the Sun (transit watching): expose for its disc like a camera, so limb darkening and a satellite's
+    // silhouette show instead of a white blur
+    {
+      const sv = U.uSunDir.value, f = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion), ang = Math.acos(clamp(f.dot(sv), -1, 1)) / DEG;
+      const ext = this.extinctionRGB(this.sm.sun.alt), Tl = 0.2126 * ext[0] + 0.7152 * ext[1] + 0.0722 * ext[2];
+      const w = sv.y > -0.01 ? smooth(6, 1.5, cam.fov) * smooth(cam.fov * 0.9, cam.fov * 0.35, ang) : 0;
+      this.sunW = w;
+      if (w > 0) E = Math.exp(lerp(Math.log(E), Math.log(1.8 / (1.27e5 * 2.15e4 * Math.max(Tl, 1e-6))), w));
+    }
     U.uExposure.value = E;
-    app.post.final.mat.uniforms.uScot.value = smooth(0.004, 0.0002, this.adaptL) * 0.45;
+    app.post.final.mat.uniforms.uScot.value = smooth(0.004, 0.0002, this.adaptL) * 0.45 * (1 - (this.sunW || 0));
     const pxRad = (cam.fov * DEG) / (h * dpr);
     U.uPxSr.value = pxRad * pxRad; U.uPxScale.value = dpr;
     U.uZoomGain.value = clamp(2.2 * Math.log10(75 / cam.fov), 0, 4.2);
@@ -194,9 +227,9 @@ export class GroundView {
     if (!this.model) return;
     const range = T.range[i], size = this.shape.size, px = (size / 1000 / range) / (this.camera.fov * DEG / (h * dpr));
     this.modelPx = px;
-    if (T.alt[i] < -2 || px < 1.2) { this.model.visible = false; return; }
+    if (T.alt[i] < -2 || px < 2) { this.model.visible = false; return; }
     this.model.visible = true;
-    this.modelFade = smooth(1.2, 5, px);
+    this.modelFade = smooth(2, 5, px);
     const det = T.detail(i, ms, this.obs), ctx = det.ctx;
     const B = det.B || { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] }, Mw = ctx.M;
     const bx = mulM3(Mw, B.x), by = mulM3(Mw, B.y), bz = mulM3(Mw, B.z);
@@ -206,27 +239,35 @@ export class GroundView {
     // refraction lifts it like a star
     const alt = Math.asin(clamp(dir.y, -1, 1)) / DEG, lift = refraction(alt, refrUniform.value) * DEG;
     if (lift > 0) { const hz = Math.hypot(dir.x, dir.z); const na = Math.asin(clamp(dir.y, -1, 1)) + lift; dir.set(dir.x / hz * Math.cos(na), Math.sin(na), dir.z / hz * Math.cos(na)); }
-    const rm = range * 1000;
-    this.model.position.copy(dir).multiplyScalar(rm);
+    // A 32-bit float can't place a 20 m object 2000 km away to better than ~1/80000 of the distance, which jitters
+    // and z-fights its surfaces. So the model is drawn at its true size only ~40 sizes from its own camera, and that
+    // camera's projection is shrunk about the object's screen position by D/range: same angular size, same place,
+    // full precision (the view is so nearly orthographic that the perspective difference is invisible).
+    const D = Math.max(size * 40, 60), Rm = range * 1000, sizeS = size;
+    this.model.scale.setScalar(1);
+    this.model.position.copy(dir).multiplyScalar(D);
+    const cN = dir.clone().project(this.camera), kz = D / Rm;
     const sb = [B.x[0] * ctx.s[0] + B.x[1] * ctx.s[1] + B.x[2] * ctx.s[2], B.y[0] * ctx.s[0] + B.y[1] * ctx.s[1] + B.y[2] * ctx.s[2], B.z[0] * ctx.s[0] + B.z[1] * ctx.s[1] + B.z[2] * ctx.s[2]];
     poseModel(this.model, sb);
     // lighting: exposure local to the model (a camera on a telescope would expose for it)
     const kM = Math.min(this.U.uExposure.value, 2.2 / (1.27e5 * 0.75 / Math.PI)) * Math.pow(2, this.ev);
     const sw = mulM3(Mw, ctx.s), Lc = det.Lc || [1, 1, 1];
     this.sunL.position.set(...sw).multiplyScalar(-1).add(this.model.position); // light comes from the Sun: position = target + sunDir
-    this.sunL.position.copy(this.model.position).add(new THREE.Vector3(...sw).multiplyScalar(size * 2));
+    this.sunL.position.copy(this.model.position).add(new THREE.Vector3(...sw).multiplyScalar(sizeS * 2));
     this.sunL.target.position.copy(this.model.position);
     const ext = this.extinctionRGB(alt);
     this.sunL.color.setRGB(Lc[0] * ext[0], Lc[1] * ext[1], Lc[2] * ext[2]); this.sunL.intensity = 1.27e5 * kM;
-    const sc = this.sunL.shadow.camera; sc.left = sc.bottom = -size * 0.6; sc.right = sc.top = size * 0.6; sc.near = 0.1; sc.far = size * 4; sc.updateProjectionMatrix();
+    const sc = this.sunL.shadow.camera; sc.left = sc.bottom = -sizeS * 0.6; sc.right = sc.top = sizeS * 0.6; sc.near = sizeS * 0.01; sc.far = sizeS * 4; sc.updateProjectionMatrix();
     const r = det.r, rl = Math.hypot(...r), down = mulM3(Mw, [-r[0] / rl, -r[1] / rl, -r[2] / rl]);
-    this.esL.position.copy(this.model.position).add(new THREE.Vector3(...down).multiplyScalar(-size * 2)); this.esL.target.position.copy(this.model.position);
+    this.esL.position.copy(this.model.position).add(new THREE.Vector3(...down).multiplyScalar(-sizeS * 2)); this.esL.target.position.copy(this.model.position);
     this.esL.intensity = 1.27e5 * kM * earthshine(r, ctx.s) * 0.8; this.esL.color.setRGB(0.75 * ext[0], 0.85 * ext[1], 1.0 * ext[2]);
     this.amb.intensity = 0.002 * 1.27e5 * kM;
     // camera with depth range just around the model
-    this.mCam.copy(this.camera); this.mCam.near = Math.max(1, rm - size * 2); this.mCam.far = rm + size * 2; this.mCam.updateProjectionMatrix();
+    this.mCam.copy(this.camera); this.mCam.near = D - sizeS * 0.8; this.mCam.far = D + sizeS * 0.8; this.mCam.updateProjectionMatrix();
+    const A = new THREE.Matrix4().set(kz, 0, 0, (1 - kz) * cN.x, 0, kz, 0, (1 - kz) * cN.y, 0, 0, 1, 0, 0, 0, 0, 1);
+    this.mCam.projectionMatrix.premultiply(A); this.mCam.projectionMatrixInverse.copy(this.mCam.projectionMatrix).invert();
     this.mCam.position.set(0, 0, 0); this.mCam.updateMatrixWorld();
-    this.model.traverse(o => { if (o.material) { const ms = Array.isArray(o.material) ? o.material : [o.material]; ms.forEach(m => { m.opacity = this.modelFade; m.transparent = this.modelFade < 0.99; }); } });
+    // the model stays opaque (no transparency sorting between its parts); the point of light fades out instead
   }
   extinctionRGB(alt) { const s = Math.sin(Math.max(alt, 0) * DEG), X = Math.min(40, 1 / (s + 0.025 * Math.exp(-11 * s))); return [0.1, 0.17, 0.33].map(t => Math.exp(-(t + 0.1) * X)); }
 

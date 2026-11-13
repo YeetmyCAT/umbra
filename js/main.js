@@ -334,7 +334,7 @@ function bindUI() {
   $('bLock').onclick = () => { app.ground.lock = !app.ground.lock; $('bLock').classList.toggle('on', app.ground.lock); if (app.mode !== 'sky') setMode('sky'); };
   $('bZoom').onclick = () => { // zoom so the object fills ~40 % of the view (its true angular size)
     const T = app.tracker, i = app.sel; if (i < 0) return; setMode('sky'); app.ground.lock = true;
-    const ang = T.shape(i).size / 1000 / T.range[i] / DEG; app.ground.fov = clamp(ang / 0.35, 0.02, 75); };
+    const ang = T.shape(i).size / 1000 / T.range[i] / DEG; app.ground.fov = clamp(ang / 0.35, 0.0015, 75); };
   $('bSpace').onclick = () => setMode('space');
   $('bPasses').onclick = () => { $('cMore').classList.remove('hidden'); $('bMore').classList.add('on'); details(); setTimeout(() => $('passList') && $('passList').scrollIntoView({ block: 'nearest' }), 50); };
   $('bMore').onclick = () => { const h = !$('cMore').classList.contains('hidden'); $('cMore').classList.toggle('hidden', h); $('bMore').classList.toggle('on', !h); if (!h) details(); };
@@ -346,6 +346,11 @@ function bindUI() {
   $('sLabelMag').value = S.labelMag; $('sLabelMagV').textContent = S.labelMag; $('sLabelMag').oninput = () => { S.labelMag = +$('sLabelMag').value; $('sLabelMagV').textContent = S.labelMag; saveSet(); };
   $('sEv').oninput = () => { app.ev = app.ground.ev = +$('sEv').value; $('sEvV').textContent = app.ev; };
   $('sRefresh').onclick = () => checkCatalog(true);
+  app.gyro.cal = +(localStorage.getItem('um_gyrocal') || 0);
+  const showCal = () => { $('sCalV').textContent = (app.gyro.cal > 0 ? '+' : '') + app.gyro.cal.toFixed(1) + '°'; };
+  $('sCal').value = app.gyro.cal; showCal();
+  $('sCal').oninput = () => { app.gyro.cal = +$('sCal').value; showCal(); try { localStorage.setItem('um_gyrocal', app.gyro.cal); } catch { } };
+  $('sCal0').onclick = () => { app.gyro.cal = 0; $('sCal').value = 0; showCal(); try { localStorage.setItem('um_gyrocal', 0); } catch { } };
   $('placeBtn').onclick = placeDialog; $('timeBtn').onclick = timeDialog;
   $('gyroBtn').onclick = toggleGyro;
 }
@@ -391,29 +396,41 @@ async function toggleGyro() {
   if (G.on) { G.on = false; $('gyroBtn').classList.remove('on'); return; }
   try { if (typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission) { const r = await DeviceOrientationEvent.requestPermission(); if (r !== 'granted') { toast('Motion access was declined'); return; } } } catch { toast('Motion sensors are not available'); return; }
   if (!G.bound) {
-    G.bound = true; G.off = null; G.cal = +(localStorage.getItem('um_gyrocal') || 0);
+    G.bound = true; G.off = null;
     const euler = new THREE.Euler(), q0 = new THREE.Quaternion(), q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5)), zee = new THREE.Vector3(0, 0, 1);
-    const handle = (e, absolute) => {
-      if (e.alpha == null) return;
-      let alpha = e.alpha;
-      if (e.webkitCompassHeading != null && e.webkitCompassAccuracy >= 0) {
-        // iOS: alpha is relative; the compass heading anchors it to north (smoothed, wraps safely)
-        const off = (360 - e.webkitCompassHeading) - e.alpha;
-        G.off = G.off == null ? off : G.off + ((((off - G.off) % 360) + 540) % 360 - 180) * 0.05;
-        alpha += G.off;
-      } else if (!absolute && !G.absSeen) { /* relative only: rely on calibration */ }
-      if (absolute) G.absSeen = true; else if (G.absSeen && e.webkitCompassHeading == null) return;
-      alpha += G.cal;
+    const fwd = new THREE.Vector3();
+    const build = (alpha, e) => {
       const orient = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
       euler.set(e.beta * DEG, alpha * DEG, -e.gamma * DEG, 'YXZ');
-      const q = new THREE.Quaternion().setFromEuler(euler).multiply(q1).multiply(q0.setFromAxisAngle(zee, -orient * DEG));
-      G.q = G.q ? G.q.slerp(q, 0.35) : q;
+      return new THREE.Quaternion().setFromEuler(euler).multiply(q1).multiply(q0.setFromAxisAngle(zee, -orient * DEG));
+    };
+    const handle = (e, absolute) => {
+      if (e.alpha == null || e.beta == null) return;
+      if (absolute) G.absSeen = true; else if (G.absSeen && e.webkitCompassHeading == null) return;
+      let alpha = e.alpha;
+      if (e.webkitCompassHeading != null) {
+        // iOS: alpha is relative; the compass heading anchors it to north. The heading is only trusted while the phone
+        // looks roughly at the horizon (pointing up or down the compass has no meaning and jumps); in between, the
+        // last good offset is kept, so moving past the zenith no longer spins the view.
+        const raw = build(e.alpha + (G.off || 0), e); fwd.set(0, 0, -1).applyQuaternion(raw);
+        const pitch = Math.asin(clamp(fwd.y, -1, 1)) / DEG;
+        const acc = e.webkitCompassAccuracy;
+        if (Math.abs(pitch) < 50 && acc != null && acc >= 0 && acc < 30) {
+          const off = (360 - e.webkitCompassHeading) - e.alpha;
+          G.off = G.off == null ? off : G.off + ((((off - G.off) % 360) + 540) % 360 - 180) * 0.02;
+        }
+        alpha += G.off || 0;
+      }
+      const q = build(alpha + G.cal, e);
+      // smoothing that follows quick turns but removes the sensor's small jitter when holding still
+      if (!G.q) G.q = q;
+      else { const ang = G.q.angleTo(q); G.q.slerp(q, clamp(ang / 0.06, 0.06, 0.7)); }
     };
     addEventListener('deviceorientationabsolute', e => handle(e, true));
     addEventListener('deviceorientation', e => handle(e, !!e.absolute));
   }
   G.on = true; $('gyroBtn').classList.add('on'); app.ground.lock = false;
-  toast('Point your phone at the sky. If the view is turned, drag sideways to line it up with a known star or the Moon.', 5000);
+  toast('Point your phone at the sky. If it is turned, set the compass correction in Settings (line it up with the Moon or a bright star).', 5000);
 }
 
 // ---------- pointer input ----------
@@ -431,7 +448,7 @@ function bindInput() {
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y; if (Math.abs(dx) + Math.abs(dy) > 5) drag.moved = true; if (!drag.moved) return;
     if (app.mode === 'sky') {
       const k = app.ground.fov / el.clientHeight;
-      if (app.gyro.on) { app.gyro.cal = drag.cal - dx * k; try { localStorage.setItem('um_gyrocal', app.gyro.cal); } catch { } return; }
+      if (app.gyro.on) return;   // the phone steers; compass correction is a slider in Settings
       app.ground.lock = false; app.ground.yaw = (drag.yaw - dx * k + 360) % 360; app.ground.pitch = clamp(drag.pitch + dy * k, -89, 89.9);
     } else if (app.mode === 'space') { const s = app.space, k = (s.onboard ? s.fov : 160) / el.clientHeight; s.yaw = drag.yaw - dx * k * (s.onboard ? -1 : 1); s.pitch = clamp(drag.pitch + dy * k * (s.onboard ? -1 : 1), -89, 89); }
     else { const o = app.orbit, k = 180 / el.clientHeight; o.yaw = drag.yaw - dx * k; o.pitch = clamp(drag.pitch + dy * k, -89, 89); }
@@ -457,7 +474,7 @@ const viewYaw = () => app.mode === 'sky' ? app.ground.yaw : app.mode === 'space'
 const viewPitch = () => app.mode === 'sky' ? app.ground.pitch : app.mode === 'space' ? app.space.pitch : app.orbit.pitch;
 const zoomVal = () => app.mode === 'sky' ? app.ground.fov : app.mode === 'space' ? (app.space.onboard ? app.space.fov : app.space.dist) : app.orbit.dist;
 function setZoom(v) {
-  if (app.mode === 'sky') app.ground.fov = clamp(v, 0.01, 120);
+  if (app.mode === 'sky') app.ground.fov = clamp(v, 0.0015, 120);
   else if (app.mode === 'space') { if (app.space.onboard) app.space.fov = clamp(v, 5, 110); else app.space.dist = clamp(v, (app.space.shape?.size || 2) * 0.6, 5e5); }
   else app.orbit.dist = clamp(v, 7500, 900000);
 }
