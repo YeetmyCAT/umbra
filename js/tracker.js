@@ -43,10 +43,23 @@ export class Tracker {
   onProp(m) {
     this.pending = false; this.latency = this.latency * 0.7 + (performance.now() - this.reqAt) * 0.3;
     const b = m.buf, ok = m.ok, K = this.K, N = this.N;
+    // Between exact SGP4 updates objects move on two-body orbits, which drift from SGP4 by up to a few km at high
+    // time rates. Rather than letting them jump when a new update lands, the difference is kept as an offset that
+    // fades out over ~0.4 s (it never applies after a time jump).
+    if (!this.corr) this.corr = new Float32Array(N * 3);
+    const blend = this.haveAnchor && !this.noBlend, dtOld = (m.t - this.anchorT) / 1000, tmp = [0, 0, 0];
+    this.noBlend = false;
+    if (!blend) this.corr.fill(0);
     for (let i = 0; i < N; i++) {
       const k = i * 12;
       if (!ok[i]) { K[k + 11] = 0; continue; }
       const j = i * 6, rx = b[j], ry = b[j + 1], rz = b[j + 2], vx = b[j + 3], vy = b[j + 4], vz = b[j + 5];
+      if (blend && K[k + 11]) {
+        this.kepler(k, dtOld, tmp, NaN);
+        const c = i * 3, cw = this.corrW;
+        const ex = tmp[0] + this.corr[c] * cw - rx, ey = tmp[1] + this.corr[c + 1] * cw - ry, ez = tmp[2] + this.corr[c + 2] * cw - rz;
+        if (ex * ex + ey * ey + ez * ez < 4e4) { this.corr[c] = ex; this.corr[c + 1] = ey; this.corr[c + 2] = ez; } else { this.corr[c] = this.corr[c + 1] = this.corr[c + 2] = 0; }
+      }
       const rm = Math.sqrt(rx * rx + ry * ry + rz * rz), v2 = vx * vx + vy * vy + vz * vz, rv = rx * vx + ry * vy + rz * vz;
       const a = 1 / (2 / rm - v2 / MU);
       if (!(a > 0) || a > 5e5) { K[k + 11] = 0; continue; }
@@ -71,13 +84,35 @@ export class Tracker {
       }
     }
     this.Ml.fill(NaN);
-    this.anchorT = m.t; this.haveAnchor = true;
+    this.anchorT = m.t; this.haveAnchor = true; this.corrT = performance.now(); this.corrW = 1;
+  }
+  decayCorr() { const w = this.corrW || 0; if (w < 1) for (let i = 0; i < this.corr.length; i++) this.corr[i] *= w; }
+  // position on the stored two-body orbit (no warm start)
+  kepler(k, dt, out) {
+    const K = this.K, a = K[k], b = K[k + 1], e = K[k + 2], n = K[k + 3], Mm = K[k + 4] + n * dt;
+    let E = Mm + e * Math.sin(Mm);
+    for (let it = 0; it < 8; it++) { const d = (E - e * Math.sin(E) - Mm) / (1 - e * Math.cos(E)); E -= d; if (Math.abs(d) < 1e-10) break; }
+    const x = a * (Math.cos(E) - e), y = b * Math.sin(E);
+    out[0] = K[k + 5] * x + K[k + 8] * y; out[1] = K[k + 6] * x + K[k + 9] * y; out[2] = K[k + 7] * x + K[k + 10] * y;
+    return out;
   }
   select(i) {
+    // newer elements for the same object: glide from the old prediction to the new one over 3 s instead of jumping
+    this.selOld = i >= 0 && i === this.sel && this.selRec ? this.selRec : null; this.selOldT = performance.now();
     this.sel = i;
     if (i < 0) { this.selRec = null; return; }
     const o = this.objs[i];
     try { this.selRec = ommToSatrec(o); } catch { this.selRec = null; }
+  }
+  // exact state of the selected object (SGP4), blended after an element update
+  selState(ms, st) {
+    if (!propagate(this.selRec, ms, st)) return false;
+    if (this.selOld) {
+      const w = 1 - (performance.now() - this.selOldT) / 3000;
+      if (w <= 0) this.selOld = null;
+      else { const o = new Float64Array(6); if (propagate(this.selOld, ms, o)) { const f = w * w * (3 - 2 * w); for (let j = 0; j < 6; j++) st[j] += (o[j] - st[j]) * f; } }
+    }
+    return true;
   }
   shape(i) { return this.shapes[i] || (this.shapes[i] = shapeFor(this.objs[i])); }
   // Move everything to simMs and evaluate it for the observer. Light-weight for objects below the horizon.
@@ -85,6 +120,8 @@ export class Tracker {
     if (!this.haveAnchor) return false;
     const ctx = obsAt(obs, simMs, this.ctx), M = ctx.M, o0 = ctx.o, s = ctx.s;
     const dt = (simMs - this.anchorT) / 1000, K = this.K, P = this.pos, V = this.vel, N = this.N;
+    this.corrW = this.corrT ? Math.exp(-(performance.now() - this.corrT) / 400) : 0;
+    const cw = this.corrW > 0.003 ? this.corrW : 0, C = this.corr;
     this.anchorAge = dt;
     const slice = (this.frameN = (this.frameN || 0) + 1) % 3;
     const minAlt = opts.minAlt ?? -2, doMag = opts.mags !== false, L = [1, 1, 1], st = new Float64Array(6);
@@ -94,7 +131,7 @@ export class Tracker {
       const k = i * 12;
       // well below the horizon and invisible: refresh every 4th frame only (it can't rise that fast)
       if (lazy && this.alt[i] < -15 && ((i & 3) !== fq) && i !== this.sel) continue;
-      if (i === this.sel && this.selRec && propagate(this.selRec, simMs, st)) {
+      if (i === this.sel && this.selRec && this.selState(simMs, st)) {
         r[0] = st[0]; r[1] = st[1]; r[2] = st[2]; v[0] = st[3]; v[1] = st[4]; v[2] = st[5];
       } else {
         if (!K[k + 11]) { this.alt[i] = -90; this.mag[i] = 99; continue; }
@@ -108,6 +145,7 @@ export class Tracker {
         r[0] = K[k + 5] * x + K[k + 8] * y; r[1] = K[k + 6] * x + K[k + 9] * y; r[2] = K[k + 7] * x + K[k + 10] * y;
         const vxp = -f * sE, vyp = f * Math.sqrt(1 - e * e) * cE;
         v[0] = K[k + 5] * vxp + K[k + 8] * vyp; v[1] = K[k + 6] * vxp + K[k + 9] * vyp; v[2] = K[k + 7] * vxp + K[k + 10] * vyp;
+        if (cw) { r[0] += C[i * 3] * cw; r[1] += C[i * 3 + 1] * cw; r[2] += C[i * 3 + 2] * cw; }
       }
       P[i * 3] = r[0]; P[i * 3 + 1] = r[1]; P[i * 3 + 2] = r[2]; V[i * 3] = v[0]; V[i * 3 + 1] = v[1]; V[i * 3 + 2] = v[2];
       if (opts.posOnly) continue;
@@ -146,7 +184,7 @@ export class Tracker {
   detail(i, simMs, obs) {
     const o = this.objs[i], st = new Float64Array(6);
     let r, v;
-    if (i === this.sel && this.selRec && propagate(this.selRec, simMs, st)) { r = [st[0], st[1], st[2]]; v = [st[3], st[4], st[5]]; }
+    if (i === this.sel && this.selRec && this.selState(simMs, st)) { r = [st[0], st[1], st[2]]; v = [st[3], st[4], st[5]]; }
     else { r = [this.pos[i * 3], this.pos[i * 3 + 1], this.pos[i * 3 + 2]]; v = [this.vel[i * 3], this.vel[i * 3 + 1], this.vel[i * 3 + 2]]; }
     const ctx = obsAt(obs, simMs, {});
     const res = look(ctx, r, v, o, this.shape(i), {});

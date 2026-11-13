@@ -132,7 +132,7 @@ function loop() {
   const R = app.renderer;
   if (R.domElement.width !== Math.floor(w * dpr) || R.domElement.height !== Math.floor(h * dpr)) { R.setPixelRatio(dpr); R.setSize(w, h, false); }
   app.post.size(Math.floor(w * dpr), Math.floor(h * dpr));
-  if (app.clock.jumped) { T.haveAnchor = T.haveAnchor && Math.abs(ms - T.anchorT) < 6 * 3600e3; T.pending = false; }
+  if (app.clock.jumped) { T.haveAnchor = T.haveAnchor && Math.abs(ms - T.anchorT) < 6 * 3600e3; T.pending = false; T.noBlend = true; T.corrT = 0; T.selOld = null; }
   T.request(ms, app.clock.rate);
   T.update(ms, app.obs, { mags: app.mode === 'sky', posOnly: app.mode !== 'sky', lazy: app.mode === 'sky', rate: app.clock.rate });
   if (app.mode === 'orbit') litAll(ms);
@@ -164,6 +164,7 @@ setTimeout(() => { app.select = select; app.setMode = setMode; app.ask = ask; })
 function select(i, center) {
   const T = app.tracker; app.sel = i; T.select(i); app.ground.path = null;
   $('card').classList.toggle('hidden', i < 0); $('cMore').classList.add('hidden'); $('bMore').classList.remove('on');
+  if (i >= 0 && app.ui.setMini && innerWidth < 640 && !app.ui.cardTouched) app.ui.setMini(true);   // phones: start compact
   app.passCache = null;
   if (i < 0) { app.ground.lock = false; return; }
   const o = T.objs[i];
@@ -329,7 +330,10 @@ function bindUI() {
   $('visList').onclick = listClick; $('findList').onclick = listClick;
   $('q').oninput = () => findList($('q').value);
   $('showShadow').checked = app.settings.shadowed; $('showShadow').onchange = () => { app.settings.shadowed = $('showShadow').checked; saveSet(); visibleList(); };
-  document.querySelector('.cardHead > div').onclick = () => $('card').classList.toggle('mini');
+  const setMini = on => { $('card').classList.toggle('mini', on); $('cMin').textContent = on ? '▴' : '▾'; };
+  app.ui.setMini = setMini;
+  document.querySelector('.cardHead > div').onclick = () => setMini(!$('card').classList.contains('mini'));
+  $('cMin').onclick = () => { app.ui.cardTouched = true; setMini(!$('card').classList.contains('mini')); };
   $('cClose').onclick = () => { select(-1); if (app.mode === 'space') setMode('sky'); try { history.replaceState(null, '', location.pathname); } catch { } };
   $('bLock').onclick = () => { app.ground.lock = !app.ground.lock; $('bLock').classList.toggle('on', app.ground.lock); if (app.mode !== 'sky') setMode('sky'); };
   $('bZoom').onclick = () => { // zoom so the object fills ~40 % of the view (its true angular size)
@@ -396,7 +400,7 @@ async function toggleGyro() {
   if (G.on) { G.on = false; $('gyroBtn').classList.remove('on'); return; }
   try { if (typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission) { const r = await DeviceOrientationEvent.requestPermission(); if (r !== 'granted') { toast('Motion access was declined'); return; } } } catch { toast('Motion sensors are not available'); return; }
   if (!G.bound) {
-    G.bound = true; G.off = null;
+    G.bound = true; G.off = null; G.samp = [];
     const euler = new THREE.Euler(), q0 = new THREE.Quaternion(), q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5)), zee = new THREE.Vector3(0, 0, 1);
     const fwd = new THREE.Vector3();
     const build = (alpha, e) => {
@@ -409,17 +413,26 @@ async function toggleGyro() {
       if (absolute) G.absSeen = true; else if (G.absSeen && e.webkitCompassHeading == null) return;
       let alpha = e.alpha;
       if (e.webkitCompassHeading != null) {
-        // iOS: alpha is relative; the compass heading anchors it to north. The heading is only trusted while the phone
-        // looks roughly at the horizon (pointing up or down the compass has no meaning and jumps); in between, the
-        // last good offset is kept, so moving past the zenith no longer spins the view.
-        const raw = build(e.alpha + (G.off || 0), e); fwd.set(0, 0, -1).applyQuaternion(raw);
-        const pitch = Math.asin(clamp(fwd.y, -1, 1)) / DEG;
+        // iOS: alpha comes from the gyroscope with its own (arbitrary) zero and does not drift, so north only has to be
+        // found once. Compass readings are taken while the phone faces roughly the horizon with good accuracy; the
+        // offset is the circular mean of the first ~25, then held fixed (no drift). It is re-estimated only if the
+        // compass disagrees by more than 6 deg for a long run of readings (a real recalibration).
         const acc = e.webkitCompassAccuracy;
-        if (Math.abs(pitch) < 50 && acc != null && acc >= 0 && acc < 30) {
-          const off = (360 - e.webkitCompassHeading) - e.alpha;
-          G.off = G.off == null ? off : G.off + ((((off - G.off) % 360) + 540) % 360 - 180) * 0.02;
+        fwd.set(0, 0, -1).applyQuaternion(build(e.alpha, e));
+        const pitch = Math.asin(clamp(fwd.y, -1, 1)) / DEG;
+        if (Math.abs(pitch) < 35 && acc != null && acc >= 0 && acc <= 25) {
+          const yaw0 = Math.atan2(fwd.x, -fwd.z) / DEG, d = yaw0 - e.webkitCompassHeading;
+          (G.samp = G.samp || []).push(d); if (G.samp.length > 60) G.samp.shift();
+          const cmean = arr => { let x = 0, y = 0; for (const v of arr) { x += Math.cos(v * DEG); y += Math.sin(v * DEG); } return Math.atan2(y, x) / DEG; };
+          const wrap = v => ((v % 360) + 540) % 360 - 180;
+          if (G.off == null && G.samp.length >= 25) G.off = cmean(G.samp);
+          else if (G.off != null && G.samp.length >= 60) {
+            const m = cmean(G.samp);
+            if (Math.abs(wrap(m - G.off)) > 6 && G.samp.every(v => Math.abs(wrap(v - m)) < 8)) { G.off = m; G.samp.length = 0; }
+          }
         }
-        alpha += G.off || 0;
+        if (G.off == null && G.samp && G.samp.length) G.off0 = G.samp[G.samp.length - 1];   // provisional until settled
+        alpha += G.off != null ? G.off : (G.off0 || 0);
       }
       const q = build(alpha + G.cal, e);
       // smoothing that follows quick turns but removes the sensor's small jitter when holding still

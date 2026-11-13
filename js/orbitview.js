@@ -49,7 +49,7 @@ export class OrbitView {
     if (this.follow && app.sel >= 0) this.target.lerp(new THREE.Vector3(T.pos[app.sel * 3], T.pos[app.sel * 3 + 1], T.pos[app.sel * 3 + 2]), 1 - Math.exp(-dt * 4)); else this.target.multiplyScalar(Math.exp(-dt * 4));
     cam.position.copy(this.target).addScaledVector(d, this.dist); cam.lookAt(this.target); cam.aspect = w / h; cam.near = Math.max(1, this.dist * 0.01); cam.far = this.dist + 2e6; cam.updateProjectionMatrix(); cam.updateMatrixWorld();
     const s = sunTEME(ms);
-    E.uCam.value.copy(cam.position); E.uInvPV.value.copy(cam.projectionMatrixInverse).premultiply(cam.matrixWorld);
+    E.uCam.value.copy(cam.position); E.uInvPV.value.copy(cam.projectionMatrixInverse).premultiply(cam.matrixWorld.clone().setPosition(0, 0, 0));
     E.uSun.value.set(s[0], s[1], s[2]); E.uG.value = gmst(ms); E.uTime.value = (ms / 1000) % 1e5;
     if ((this.fn = (this.fn || 0) + 1) % 8 === 1) { const m = meterEarth(this.r, this.earth, cam); if (m) this.la = m.La; }
     this.adapt = Math.exp((Math.log(this.adapt || 3000) * 0.85 + Math.log(Math.max(this.la || 3000, 2e-3)) * 0.15));

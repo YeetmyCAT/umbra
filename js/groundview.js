@@ -2,7 +2,7 @@
 // Moon, planets) with every satellite as a point source of its real brightness and colour, and the selected one as
 // a real-size 3D model once the zoom makes it more than a pixel or two across.
 import * as THREE from '../vendor/three.module.min.js';
-import { makeSkyLUT, makeSkyBackground, makeStars, makePlanets, makeMoon, makeMoonGlare, milkyWayPhoto, makeFaintStars, makeGaiaStars, starMaterial } from './sky.js';
+import { sunPrimeMeridian, makeSkyLUT, makeSkyBackground, makeStars, makePlanets, makeMoon, makeMoonGlare, milkyWayPhoto, makeFaintStars, makeGaiaStars, starMaterial } from './sky.js';
 import { refrUniform, COMMON } from './glsl.js';
 import { sunMoon, planets as planetPos, altAzToVec, eqjToWorld, observer as astroObserver, EQ2GAL, OBLIQ, refraction } from './astro.js';
 import { buildModel, poseModel, disposeModel } from './models3d.js';
@@ -109,7 +109,7 @@ export class GroundView {
     const pa = Math.acos(clamp(-ml.dot(new THREE.Vector3(...mv)), -1, 1)) / DEG, md = moonGain(pa), bE = Math.PI - pa * DEG;
     U.uMoonGain.value = md.gain; U.uMoonAvg.value = 2900 * (md.gain * 2 * md.lsMean + 1.32e-4 * (Math.sin(bE) + (Math.PI - bE) * Math.cos(bE)) / Math.PI);
     const m = eqjToWorld(date, astroObserver(lat, lon, h * 1000)); this.eqm = m;
-    U.uEqToWorld.value.set(...m); U.uGal.value.set(...EQ2GAL);
+    U.uEqToWorld.value.set(...m); U.uGal.value.set(...EQ2GAL); U.uSunW.value = sunPrimeMeridian(ms);
     const ce = Math.cos(OBLIQ), se = Math.sin(OBLIQ);
     U.uEclip.value.copy(new THREE.Matrix3().set(1, 0, 0, 0, ce, se, 0, -se, ce).multiply(new THREE.Matrix3().set(...m).transpose()));
     const pl = planetPos(date, lat, lon, h * 1000); this.pl = pl;
@@ -169,9 +169,11 @@ export class GroundView {
     {
       const sv = U.uSunDir.value, f = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion), ang = Math.acos(clamp(f.dot(sv), -1, 1)) / DEG;
       const ext = this.extinctionRGB(this.sm.sun.alt), Tl = 0.2126 * ext[0] + 0.7152 * ext[1] + 0.0722 * ext[2];
-      const w = sv.y > -0.01 ? smooth(6, 1.5, cam.fov) * smooth(cam.fov * 0.9, cam.fov * 0.35, ang) : 0;
-      this.sunW = w;
-      if (w > 0) E = Math.exp(lerp(Math.log(E), Math.log(1.8 / (1.27e5 * 2.15e4 * Math.max(Tl, 1e-6))), w));
+      // the Sun counts as in view while any of its disc (radius 0.27 deg) is inside the frame
+      const edge = 0.267 + cam.fov * 0.5 * Math.hypot(1, w / h);   // disc radius + half the frame diagonal
+      const sw = sv.y > -0.01 ? smooth(6, 1.5, cam.fov) * smooth(edge + 0.1, edge, ang) : 0;
+      this.sunW = sw;
+      if (sw > 0) E = Math.exp(lerp(Math.log(E), Math.log(1.8 / (1.27e5 * 2.15e4 * Math.max(Tl, 1e-6))), sw));
     }
     U.uExposure.value = E;
     app.post.final.mat.uniforms.uScot.value = smooth(0.004, 0.0002, this.adaptL) * 0.45 * (1 - (this.sunW || 0));
@@ -179,7 +181,7 @@ export class GroundView {
     U.uPxSr.value = pxRad * pxRad; U.uPxScale.value = dpr;
     U.uZoomGain.value = clamp(2.2 * Math.log10(75 / cam.fov), 0, 4.2);
     U.uMoonGlare.value = smooth(8, 25, cam.fov);
-    U.uInvProjView.value.copy(cam.projectionMatrixInverse).premultiply(cam.matrixWorld); U.uCamPos.value.copy(cam.position);
+    U.uInvProjView.value.copy(cam.projectionMatrixInverse).premultiply(cam.matrixWorld); U.uCamPos.value.copy(cam.position); U.uViewport.value.set(app.post.rt.width, app.post.rt.height);
     // deep Gaia stars only when zoomed in (they are below the naked-eye limit anyway)
     if (cam.fov < 40 && !this.gaiaLoading) { this.gaiaLoading = true; for (const f of ['data/gaia1.bin', 'data/gaia2.bin']) makeGaiaStars(U, f).then(p => { this.gaia.push(p); this.scene.add(p); }).catch(() => { }); }
     // satellites
@@ -258,6 +260,7 @@ export class GroundView {
     const ext = this.extinctionRGB(alt);
     this.sunL.color.setRGB(Lc[0] * ext[0], Lc[1] * ext[1], Lc[2] * ext[2]); this.sunL.intensity = 1.27e5 * kM;
     const sc = this.sunL.shadow.camera; sc.left = sc.bottom = -sizeS * 0.6; sc.right = sc.top = sizeS * 0.6; sc.near = sizeS * 0.01; sc.far = sizeS * 4; sc.updateProjectionMatrix();
+    this.sunL.shadow.bias = -0.0004; this.sunL.shadow.normalBias = sizeS / 1024 * 2.5;
     const r = det.r, rl = Math.hypot(...r), down = mulM3(Mw, [-r[0] / rl, -r[1] / rl, -r[2] / rl]);
     this.esL.position.copy(this.model.position).add(new THREE.Vector3(...down).multiplyScalar(-sizeS * 2)); this.esL.target.position.copy(this.model.position);
     this.esL.intensity = 1.27e5 * kM * earthshine(r, ctx.s) * 0.8; this.esL.color.setRGB(0.75 * ext[0], 0.85 * ext[1], 1.0 * ext[2]);

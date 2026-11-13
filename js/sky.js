@@ -116,6 +116,32 @@ export function makeSkyLUT(renderer, U) {
   } };
 }
 
+
+// Sunspots and faculae from a real 360 deg map of the solar surface (SDO/HMI synoptic magnetogram of Carrington
+// rotation 2287, mid-2024 near solar maximum; tools/sunmap.py). It is wrapped on the Sun about its true axis (J2000
+// RA 286.13, Dec 63.87) and turned with the IAU prime meridian W = 84.176 + 14.1844 d deg, so spots cross the disc
+// from the east limb to the west limb in ~13.5 days at any date. n: surface normal (J2000), mu: cos of the view angle.
+export const SUNSPOTS = /* glsl */`
+uniform sampler2D uSunMap; uniform float uSunW;
+float sunspots(vec3 n, float mu){
+  const vec3 P = vec3(0.12266, -0.42330, 0.89765);
+  vec3 Q = normalize(cross(vec3(0.0, 0.0, 1.0), P)), S = cross(P, Q);   // Q: ascending node of the solar equator
+  float lat = asin(clamp(dot(n, P), -1.0, 1.0));
+  float L = atan(dot(n, S), dot(n, Q)) - uSunW;
+  vec2 uv = vec2(fract(L/6.2831853), 0.5 + lat/3.14159265);
+  vec2 m = texture(uSunMap, uv).rg;
+  // faculae: bright plage that shows mainly toward the limb
+  return m.r * (1.0 + m.g*0.28*pow(1.0 - mu, 1.5));
+}`;
+let sunTex = null;
+export function sunMapTexture(THREE_) {
+  if (sunTex) return sunTex;
+  sunTex = new THREE.TextureLoader().load('data/sun-map.png'); sunTex.colorSpace = THREE.NoColorSpace; sunTex.wrapS = THREE.RepeatWrapping; sunTex.anisotropy = 8;
+  return sunTex;
+}
+// IAU solar prime meridian angle (radians, wrapped) at unix ms
+export function sunPrimeMeridian(ms) { const d = (ms - 946728000000) / 864e5; return (((84.176 + 14.1844 * d) % 360) + 360) % 360 * Math.PI / 180; }
+
 // Light-pollution sky texture from the worker output (log-encoded, uniform in sqrt-altitude).
 export function lpSkyTexture(lp) {
   const W = lp.nAz, H = 32, data = new Uint8Array(W * H * 4);
@@ -140,7 +166,7 @@ export function lpSkyTexture(lp) {
 
 // Background: sky LUT + sun disc + Milky Way. Drawn first, at the far plane.
 export function makeSkyBackground(U, mwTex) {
-  Object.assign(U, { uMW: { value: mwTex }, uEqToWorld: { value: new THREE.Matrix3() }, uGal: { value: new THREE.Matrix3() }, uInvProjView: { value: new THREE.Matrix4() }, uCamPos: { value: new THREE.Vector3() }, uMWScale: { value: 1 },
+  Object.assign(U, { uViewport: { value: new THREE.Vector2() }, uSunW: { value: 0 }, uSunMap: { value: sunMapTexture() }, uMW: { value: mwTex }, uEqToWorld: { value: new THREE.Matrix3() }, uGal: { value: new THREE.Matrix3() }, uInvProjView: { value: new THREE.Matrix4() }, uCamPos: { value: new THREE.Vector3() }, uMWScale: { value: 1 },
     uAurora: { value: new THREE.Vector4() }, uAurP: { value: (() => { const t = new THREE.DataTexture(new Uint8Array(4), 1, 1); t.needsUpdate = true; return t; })() }, uENU: { value: new THREE.Matrix3() }, uObsECEF: { value: new THREE.Vector3(0, 0, 6371) }, uMagAxis: { value: new THREE.Vector3(0, 0, 1) } });
   const mat = new THREE.ShaderMaterial({
     uniforms: U, depthTest: false, depthWrite: false,
@@ -148,8 +174,13 @@ export function makeSkyBackground(U, mwTex) {
       void main(){ vec4 w = uInvProjView * vec4(position.xy, 0.5, 1.0); vDir = w.xyz/w.w - uCamPos; gl_Position = vec4(position.xy, 1.0, 1.0); }`,
     fragmentShader: COMMON + /* glsl */`
       in vec3 vDir; uniform sampler2D uMW; uniform mat3 uEqToWorld, uGal; uniform float uMWScale, uSunSquish;
+      ${SUNSPOTS}
+      uniform vec2 uViewport; uniform mat4 uInvProjView; uniform vec3 uCamPos;
       void main(){
+        // the view direction from this pixel's exact screen position: an interpolated direction is too coarse when
+        // zoomed onto the Sun (its surface would be sampled in steps)
         vec3 d = normalize(vDir);
+        if (uViewport.x > 0.0) { vec4 wp = uInvProjView * vec4(gl_FragCoord.xy/uViewport*2.0 - 1.0, 0.5, 1.0); d = normalize(wp.xyz/wp.w - uCamPos); }
         vec3 dT = refrTrue(d);     // where this line of sight points without the atmosphere's bending
         vec3 col = skyL(d);
         float sh = d.y;
@@ -162,6 +193,11 @@ export function makeSkyBackground(U, mwTex) {
         if (r < R*1.6 && sh > -0.02) {
           float mu = sqrt(max(0.0, 1.0 - (r/R)*(r/R)));
           float limb = r < R ? (0.4 + 0.6*mu) : 0.0;
+          if (r < R) {   // the point on the solar surface this ray sees -> sunspots
+            vec2 uv = vec2(dot(d, sH), dot(d, sV)/uSunSquish)/R;
+            vec3 nW = normalize(sH*uv.x + sV*uv.y - uSunDir*sqrt(max(0.0, 1.0 - dot(uv, uv))));
+            limb *= sunspots(transpose(uEqToWorld)*nW, mu);
+          }
           col += uSunE * 2.15e4 * limb * directT(uSunDir.y) * uExposure * smoothstep(-0.02, 0.0, sh);
         }
         // Milky Way from an all-sky photograph (ESO/S. Brunier), stars removed, mapped in galactic coordinates

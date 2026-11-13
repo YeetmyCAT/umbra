@@ -26,7 +26,7 @@ export function makeEarth() {
     uniforms: U, depthTest: false, depthWrite: false, transparent: true,
     blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
     vertexShader: `out vec3 vRay; uniform mat4 uInvPV; uniform vec3 uCam;
-      void main(){ vec4 w = uInvPV * vec4(position.xy, 0.5, 1.0); vRay = w.xyz/w.w - uCam; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
+      void main(){ vec4 w = uInvPV * vec4(position.xy, 0.5, 1.0); vRay = w.xyz/w.w; /* uInvPV is rotation-only: camera at the origin */ gl_Position = vec4(position.xy, 0.0, 1.0); }`,
     fragmentShader: /* glsl */`
       precision highp float;
       #define PI 3.14159265

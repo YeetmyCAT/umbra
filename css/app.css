@@ -107,3 +107,11 @@ input { font: inherit; color: inherit; }
 #card.mini .cLive div:nth-child(n+4), #card.mini .cBtns, #card.mini .cMore { display: none !important; }
 #card.mini .cLive { margin-bottom: 0; }
 .cardHead > div:first-child { cursor: pointer; }
+
+.cHeadBtns { display: flex; gap: 2px; align-items: flex-start; }
+#cMin { font-size: 18px; padding: 0 6px; }
+#card.mini { padding: 6px 10px; }
+#card.mini .cSub { display: none; }
+#card.mini .cLive { margin: 4px 0 0; }
+#card.mini .cLive b { font-size: 13px; }
+@media (max-width: 640px) { #card.mini { width: auto; max-width: calc(100vw - 16px); } }

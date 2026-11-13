@@ -1,9 +1,9 @@
 // Offline support: app files cached (bump APP when they change); orbital data always tried from the network first.
-const APP = 'umbra-app-v2', DATA = 'umbra-data';
+const APP = 'umbra-app-v3', DATA = 'umbra-data';
 const FILES = ['./', 'index.html', 'css/app.css', 'manifest.webmanifest', 'js/main.js', 'js/catalog.js', 'js/tracker.js', 'js/worker.js', 'js/sgp.js', 'js/frames.js', 'js/light.js', 'js/sight.js', 'js/shapes.js', 'js/purpose.js',
   'js/models3d.js', 'js/groundview.js', 'js/spaceview.js', 'js/orbitview.js', 'js/earth.js', 'js/sky.js', 'js/glsl.js', 'js/astro.js', 'js/post.js', 'js/clock.js',
   'vendor/three.module.min.js', 'vendor/satellite.min.js', 'vendor/astronomy.browser.min.js', 'vendor/leaflet/leaflet.js', 'vendor/leaflet/leaflet.css',
-  'data/stars.json', 'data/stars8.bin', 'data/constlines.json', 'data/milkyway.jpg', 'data/moon.jpg', 'data/earth-day.jpg', 'data/earth-lights.jpg', 'data/earth-aux.jpg'];
+  'data/stars.json', 'data/stars8.bin', 'data/constlines.json', 'data/milkyway.jpg', 'data/moon.jpg', 'data/earth-day.jpg', 'data/earth-lights.jpg', 'data/earth-aux.jpg', 'data/sun-map.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(APP).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(k => Promise.all(k.filter(n => n.startsWith('umbra-app') && n !== APP).map(n => caches.delete(n)))).then(() => self.clients.claim())); });
 self.addEventListener('fetch', e => {

@@ -3,7 +3,7 @@
 // rotated from J2000 into the true equator of date (~TEME).
 import * as THREE from '../vendor/three.module.min.js';
 import { makeEarth } from './earth.js';
-import { makeStars, makeMoon, makePlanets, milkyWayPhoto, makeFaintStars, starMaterial } from './sky.js';
+import { makeStars, makeMoon, makePlanets, milkyWayPhoto, makeFaintStars, starMaterial, SUNSPOTS, sunMapTexture, sunPrimeMeridian } from './sky.js';
 import { buildModel, poseModel, disposeModel } from './models3d.js';
 import { gmst, sunTEME, moonTEME, DEG } from './frames.js';
 import { propagate } from './sgp.js';
@@ -23,7 +23,7 @@ export class SpaceView {
       uSkyLUT: { value: blackTex() }, uSkyLUTLow: { value: blackTex() }, uExposure: { value: 1 }, uSunDir: { value: new THREE.Vector3() }, uMoonDir: { value: new THREE.Vector3() },
       uSunE: { value: new THREE.Vector3(1.27e5, 1.25e5, 1.2e5) }, uMoonE: { value: new THREE.Vector3() }, uAOD: { value: 0 }, uTime: { value: 0 }, uRefrK: { value: 0 }, uSunSquish: { value: 1 }, uMoonSquish: { value: 1 },
       uNight: { value: 0 }, uSnow: { value: 0 }, uWet: { value: 0 }, uVisKm: { value: 100 }, uOvercast: { value: 0 }, uFlash: { value: new THREE.Vector4() }, uNoAtm: { value: 1 },
-      uEqToWorld: { value: new THREE.Matrix3() }, uMW: { value: milkyWayPhoto() }, uGal: { value: new THREE.Matrix3().set(...EQ2GAL) }, uInvProjView: { value: new THREE.Matrix4() }, uCamPos: { value: new THREE.Vector3() },
+      uViewport: { value: new THREE.Vector2() }, uSunW: { value: 0 }, uSunMap: { value: sunMapTexture() }, uEqToWorld: { value: new THREE.Matrix3() }, uMW: { value: milkyWayPhoto() }, uGal: { value: new THREE.Matrix3().set(...EQ2GAL) }, uInvProjView: { value: new THREE.Matrix4() }, uCamPos: { value: new THREE.Vector3() },
     };
     this.sky = new THREE.Scene();
     this.sky.add(this.bgMesh());
@@ -51,13 +51,16 @@ export class SpaceView {
       uniforms: this.U, depthTest: false, depthWrite: false,
       vertexShader: `out vec3 vDir; uniform mat4 uInvProjView; uniform vec3 uCamPos; void main(){ vec4 w = uInvProjView * vec4(position.xy, 0.5, 1.0); vDir = w.xyz/w.w - uCamPos; gl_Position = vec4(position.xy, 1.0, 1.0); }`,
       fragmentShader: `in vec3 vDir; uniform sampler2D uMW; uniform mat3 uEqToWorld, uGal; uniform vec3 uSunDir, uSunE; uniform float uExposure;
+        ${SUNSPOTS}
+        uniform vec2 uViewport; uniform mat4 uInvProjView;
         void main(){ vec3 d = normalize(vDir);
+          if (uViewport.x > 0.0) { vec4 wp = uInvProjView * vec4(gl_FragCoord.xy/uViewport*2.0 - 1.0, 0.5, 1.0); d = normalize(wp.xyz/wp.w); }
           vec3 g = uGal * (transpose(uEqToWorld) * d); float gl = atan(g.y, g.x), gb = asin(clamp(g.z, -1.0, 1.0));
           vec2 uv = vec2(0.5 - gl/6.2831853, 0.5 + gb/3.14159265); vec2 gx = dFdx(uv), gy = dFdy(uv); gx.x -= floor(gx.x + 0.5); gy.x -= floor(gy.x + 0.5);
           vec3 mw = textureGrad(uMW, uv, gx, gy).rgb; mw *= mw;
           vec3 col = mw*1.3e-3*1.25*uExposure;
           float r = acos(clamp(dot(d, uSunDir), -1.0, 1.0)), R = 0.00465;
-          if (r < R) { float mu = sqrt(1.0 - (r/R)*(r/R)); col += uSunE*2.15e4*(0.4 + 0.6*mu)*uExposure; }
+          if (r < R) { float mu = sqrt(1.0 - (r/R)*(r/R)); vec3 sH = normalize(cross(uSunDir, abs(uSunDir.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0))), sV = cross(sH, uSunDir); vec2 uv = vec2(dot(d, sH), dot(d, sV))/R; vec3 nW = normalize(sH*uv.x + sV*uv.y - uSunDir*sqrt(max(0.0, 1.0 - dot(uv, uv)))); col += uSunE*2.15e4*(0.4 + 0.6*mu)*sunspots(transpose(uEqToWorld)*nW, mu)*uExposure; }
           // faint zodiacal-free solar corona glow in the eye/lens
           col += uSunE*uExposure*2.0e-7/(pow(r/R, 2.5) + 0.2);
           gl_FragColor = vec4(min(col, vec3(3.0e4)), 1.0); }`,
@@ -74,7 +77,7 @@ export class SpaceView {
     if (i < 0) return false;
     // exact state of the satellite
     const st = new Float64Array(6);
-    if (!T.selRec || !propagate(T.selRec, ms, st)) return false;
+    if (!T.selRec || !T.selState(ms, st)) return false;
     const r = [st[0], st[1], st[2]], v = [st[3], st[4], st[5]];
     const rv = new THREE.Vector3(...r), up = rv.clone().normalize(), vel = new THREE.Vector3(...v);
     const fwd = vel.clone().addScaledVector(up, -vel.dot(up)).normalize(), right = fwd.clone().cross(up);
@@ -86,6 +89,7 @@ export class SpaceView {
       this.modelIdx = i; this.shape = T.shape(i); this.model = buildModel(this.shape); this.mScene.add(this.model);
       this.dist = Math.max(0.12, this.shape.size * 1.8);
       const sc = this.sunL.shadow.camera, z = this.shape.size * 0.6; sc.left = sc.bottom = -z; sc.right = sc.top = z; sc.near = 0.1; sc.far = this.shape.size * 4; sc.updateProjectionMatrix();
+      this.sunL.shadow.normalBias = this.shape.size / 2048 * 2.5;
     }
     const B = bodyFrame(this.shape.att, r, v, s, ms, T.objs[i].id);
     this.model.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3(...B.x), new THREE.Vector3(...B.y), new THREE.Vector3(...B.z)));
@@ -103,15 +107,15 @@ export class SpaceView {
     const skyCam = this.skyCam || (this.skyCam = new THREE.PerspectiveCamera());
     skyCam.copy(cam); skyCam.position.set(0, 0, 0); skyCam.near = 0.1; skyCam.far = 1e7; skyCam.updateProjectionMatrix(); skyCam.updateMatrixWorld();
     const camKm = rv.clone().addScaledVector(cam.position, 1e-3);
+    // ray directions from a rotation-only matrix (skyCam sits at the origin); the camera position is separate, so no
+    // large numbers cancel in float32 (that made the Earth jitter, worst from GEO)
     E.uCam.value.copy(camKm); E.uInvPV.value.copy(skyCam.projectionMatrixInverse).premultiply(skyCam.matrixWorld);
-    // the inverse projection gives directions around the origin; the shader adds uCam back, so shift the matrix
-    E.uInvPV.value.premultiply(new THREE.Matrix4().makeTranslation(camKm.x, camKm.y, camKm.z));
     E.uSun.value.copy(sun); E.uMoon.value.copy(new THREE.Vector3(...mp).normalize()); E.uG.value = gmst(ms); E.uTime.value = (ms / 1000) % 1e5;
     E.uMoonE.value = Math.pow(10, -0.4 * (this.app.moonMag + 13.99)) || 0.1;
     // sky uniforms
-    const eq = this.eqToTeme(ms); U.uEqToWorld.value.set(...eq);
+    const eq = this.eqToTeme(ms); U.uEqToWorld.value.set(...eq); U.uSunW.value = sunPrimeMeridian(ms);
     U.uSunDir.value.copy(sun); U.uMoonDir.value.copy(moonV);
-    U.uInvProjView.value.copy(skyCam.projectionMatrixInverse).premultiply(skyCam.matrixWorld); U.uCamPos.value.set(0, 0, 0);
+    U.uInvProjView.value.copy(skyCam.projectionMatrixInverse).premultiply(skyCam.matrixWorld); U.uCamPos.value.set(0, 0, 0); U.uViewport.value.set(app.post.rt.width, app.post.rt.height);
     U.uMoonE.value.set(1, 0.94, 0.86).multiplyScalar(E.uMoonE.value);
     const ml = sun.clone().multiplyScalar(1.496e8).sub(new THREE.Vector3(...mp)).normalize(); U.uMoonLight.value.copy(ml);
     U.uMoonRadius.value = Math.atan(1737.4 / moonD); U.uMoonLum.value = 2900; U.uMoonGain.value = 1; U.uMoonAvg.value = 2900 * 0.3;
