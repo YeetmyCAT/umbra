@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#05070c">
+<title>Umbra Satellite Sky</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="stage">
+  <canvas id="gl"></canvas>
+  <canvas id="ov"></canvas>
+</div>
+
+<header id="top" class="hud">
+  <button id="placeBtn" class="chip" title="Change location"><span class="ico">⌖</span><span id="placeTxt">Locating…</span></button>
+  <button id="timeBtn" class="chip" title="Set date and time"><span id="timeTxt">—</span></button>
+  <div class="seg" id="modeSeg">
+    <button data-mode="sky" class="on" title="Sky from the ground">Sky</button>
+    <button data-mode="space" title="View from the selected satellite">Satellite</button>
+    <button data-mode="orbit" title="Every object in orbit">Orbits</button>
+  </div>
+</header>
+
+<aside id="card" class="hud hidden">
+  <div class="cardHead">
+    <div><div id="cName" class="cName"></div><div id="cSub" class="cSub"></div></div>
+    <button id="cClose" class="x" title="Deselect">×</button>
+  </div>
+  <div id="cLive" class="cLive"></div>
+  <div class="cBtns">
+    <button id="bLock" class="btn">Track</button>
+    <button id="bZoom" class="btn">Zoom to size</button>
+    <button id="bSpace" class="btn">From orbit</button>
+    <button id="bPasses" class="btn">Passes</button>
+    <button id="bMore" class="btn">Details</button>
+  </div>
+  <div id="cMore" class="cMore hidden"></div>
+</aside>
+
+<aside id="panel" class="hud hidden">
+  <div class="tabs" id="tabs">
+    <button data-tab="vis" class="on">Visible</button>
+    <button data-tab="find">Search</button>
+    <button data-tab="events">Events</button>
+    <button data-tab="set">Settings</button>
+    <button id="pClose" class="x">×</button>
+  </div>
+  <div class="tab" id="tab-vis">
+    <div class="chips" id="filters">
+      <button data-f="all" class="on">All</button><button data-f="bright">Bright</button><button data-f="stations">Stations</button><button data-f="starlink">Starlink</button><button data-f="sci">Telescopes</button><button data-f="nav">GNSS</button><button data-f="geo">GEO</button><button data-f="rb">Rocket bodies</button><button data-f="debris">Debris</button>
+    </div>
+    <div class="listHead"><span id="visCount"></span><label><input type="checkbox" id="showShadow"> in shadow too</label></div>
+    <div id="visList" class="list"></div>
+  </div>
+  <div class="tab hidden" id="tab-find">
+    <input id="q" type="search" placeholder="Name, NORAD number or COSPAR ID" autocomplete="off" spellcheck="false">
+    <div id="findList" class="list"></div>
+  </div>
+  <div class="tab hidden" id="tab-events">
+    <div class="evBtns">
+      <button id="eFlares" class="btn">Flares &amp; glints</button>
+      <button id="eGeo" class="btn">GEO glints</button>
+      <button id="eTransits" class="btn">Sun/Moon transits</button>
+      <button id="eBright" class="btn">Bright passes</button>
+    </div>
+    <label class="row note"><input type="checkbox" id="eStar"> Include Starlink in the flare search (about 9,000 satellites: slower)</label>
+    <div id="evInfo" class="note"></div>
+    <div id="evList" class="list"></div>
+  </div>
+  <div class="tab hidden" id="tab-set">
+    <label class="row"><input type="checkbox" id="sLines" checked> Constellation lines</label>
+    <label class="row"><input type="checkbox" id="sGrid"> Alt-azimuth grid</label>
+    <label class="row"><input type="checkbox" id="sLabels" checked> Labels</label>
+    <label class="row">Label satellites brighter than <input type="range" id="sLabelMag" min="0" max="9" step="0.5" value="4"> <span id="sLabelMagV">4</span></label>
+    <label class="row">Brightness <input type="range" id="sEv" min="-3" max="3" step="0.25" value="0"> <span id="sEvV">0</span> EV</label>
+    <label class="row"><input type="checkbox" id="sAurora" checked> Aurora in the satellite view</label>
+    <div class="note" id="catInfo"></div>
+    <button id="sRefresh" class="btn">Check for newer orbital elements</button>
+    <div class="note">Orbits: CelesTrak GP/OMM (SGP4/SDP4). Brightness: facet models of each spacecraft's real shape and attitude, Earth's shadow with penumbra and atmospheric reddening, earthshine. Stars: Yale BSC, Hipparcos/Tycho and Gaia DR3. Sky: SkyScout atmosphere model.</div>
+  </div>
+</aside>
+
+<footer id="bar" class="hud">
+  <div class="tctl">
+    <button id="tSlow" title="Slower / reverse">⏪</button>
+    <button id="tPlay" title="Pause / play">⏸</button>
+    <button id="tFast" title="Faster">⏩</button>
+    <button id="tNow" class="now" title="Back to now">Now</button>
+    <span id="rate">Real time</span>
+  </div>
+  <div class="tools">
+    <button id="gyroBtn" title="Point your phone at the sky">◎<small>Sensor</small></button>
+    <button id="listBtn" title="Satellites in view">☰<small>List</small></button>
+  </div>
+</footer>
+
+<div id="modal" class="hidden">
+  <div class="sheet" id="sheet"></div>
+</div>
+
+<div id="loading"><div class="lt">UMBRA</div><div id="lmsg">Loading…</div><div class="lbar"><i id="lprog"></i></div></div>
+
+<script src="vendor/astronomy.browser.min.js"></script>
+<script src="vendor/satellite.min.js"></script>
+<script src="vendor/leaflet/leaflet.js"></script>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

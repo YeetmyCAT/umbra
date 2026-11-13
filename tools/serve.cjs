@@ -1,0 +1,21 @@
+// Local static server for testing. No caching, so edits always reach the browser.
+const http = require('http'), fs = require('fs'), path = require('path');
+const root = path.join(__dirname, '..'), port = +process.argv[2] || 8133;
+const types = { '.html': 'text/html', '.js': 'text/javascript', '.png': 'image/png', '.jpg': 'image/jpeg', '.txt': 'text/plain', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json', '.mjs': 'text/javascript', '.bin': 'application/octet-stream', '.cjs': 'text/javascript' };
+http.createServer((req, res) => {
+  // testing aid: POST /__shot saves a canvas snapshot (data URL body) to ../.tmp/shot.png next to the repo
+  if (req.method === 'POST' && req.url.startsWith('/__shot')) {
+    let b = ''; req.on('data', d => b += d); req.on('end', () => {
+      const out = path.join(root, '..', '.tmp', 'shot.png'); fs.mkdirSync(path.dirname(out), { recursive: true });
+      fs.writeFileSync(out, Buffer.from(b.replace(/^data:image\/\w+;base64,/, ''), 'base64')); res.writeHead(200); res.end(out);
+    }); return;
+  }
+  let p = decodeURIComponent(req.url.split('?')[0]); if (p == '/') p = '/index.html';
+  const f = path.join(root, path.normalize(p));
+  if (!f.startsWith(root)) { res.writeHead(403); return res.end(); }
+  fs.stat(f, (e, st) => {
+    if (e || !st.isFile()) { res.writeHead(404); return res.end(); }
+    res.writeHead(200, { 'Content-Type': types[path.extname(f)] || 'application/octet-stream', 'Content-Length': st.size, 'Cache-Control': 'no-store' });
+    fs.createReadStream(f).pipe(res);
+  });
+}).listen(port, () => console.log('serving', root, 'on', port));

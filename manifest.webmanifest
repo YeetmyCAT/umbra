@@ -1,0 +1,14 @@
+{
+  "name": "Umbra Satellite Sky",
+  "short_name": "Umbra",
+  "description": "Satellite planetarium: every tracked object in orbit, with real brightness, flares, glints and shapes.",
+  "start_url": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#05070c",
+  "theme_color": "#05070c",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
