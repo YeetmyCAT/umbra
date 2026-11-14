@@ -133,6 +133,11 @@ export class PlanetDiscs {
     const toW = v => [m[0] * v[0] + m[1] * v[1] + m[2] * v[2], m[3] * v[0] + m[4] * v[1] + m[5] * v[2], m[6] * v[0] + m[7] * v[1] + m[8] * v[2]];
     const sunG = Ast.GeoVector('Sun', t, true);
     this.info = {};
+    // the Sun's true distance and direction from here: a planet is hidden behind it only if farther away (so Mars and
+    // the outer planets can never cross it), and only Mercury and Venus can pass in front of it
+    const se = Ast.Equator('Sun', date, obsAstro, false, true), sunDist = se.dist * 149597870.7, sV = se.vec ? [se.vec.x, se.vec.y, se.vec.z] : raDec(se.ra * 15, se.dec), sl = Math.hypot(...sV);
+    const sunDir = lift(toW(sV.map(x => x / sl))), sunRad = Math.asin(696000 / sunDist);
+    const occ = [this.U.uOcc1, this.U.uOcc2]; if (occ[0]) occ.forEach(o => o.value.set(0, 0, 1, 0));
     for (const name of NAMES) {
       const P = PLANET_DATA[name], dsc = this.discs[name];
       // topocentric, light-time corrected position (EQJ, AU)
@@ -150,7 +155,9 @@ export class PlanetDiscs {
       const litFrac = Math.max(0.02, (Math.sin(phase) + (Math.PI - phase) * Math.cos(phase)) / Math.PI);   // Lambert sphere relative to full
       u.uLum.value = E / (Math.PI * rad * rad) / litFrac * (name === 'Saturn' ? 0.55 : 1);
       u.uPE.value = 1.3 / Math.max(u.uLum.value, 1e-9);
-      this.info[name] = { dir: ld, dirU: dir, rad, dist, mag, pole: u.uPole.value.clone() };
+      const sep = angle(ld, sunDir), near = sep < sunRad + rad, behind = near && dist > sunDist, front = near && dist < sunDist;
+      if (front && occ[0] && (name === 'Mercury' || name === 'Venus')) occ[name === 'Mercury' ? 0 : 1].value.set(ld[0], ld[1], ld[2], rad);
+      this.info[name] = { dir: ld, dirU: dir, rad, dist, mag, pole: u.uPole.value.clone(), behind, front };
     }
     // Jupiter's Galilean moons (real positions) and Saturn's large moons (approximate, ring plane)
     const P = this.moonPts.attributes.position.array, M = this.moonPts.attributes.mag.array; let k = 0; this.moonLabels = [];
@@ -180,7 +187,7 @@ export class PlanetDiscs {
   // show a disc once it is a few pixels across; returns the planets drawn as discs (their points are dimmed)
   frame(pxRad) {
     const out = {};
-    for (const name of NAMES) { const dsc = this.discs[name], i = this.info && this.info[name]; if (!i) continue; const px = i.rad / pxRad; dsc.m.visible = px > 1.5 && i.dir[1] > -0.02; out[name] = Math.min(1, Math.max(0, (px - 1.5) / 2.5)); }
+    for (const name of NAMES) { const dsc = this.discs[name], i = this.info && this.info[name]; if (!i) continue; const px = i.rad / pxRad; dsc.m.visible = px > 1.5 && i.dir[1] > -0.02 && !i.behind; out[name] = i.behind ? 1 : Math.min(1, Math.max(0, (px - 1.5) / 2.5)); }
     return out;
   }
 }

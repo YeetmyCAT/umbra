@@ -1,9 +1,10 @@
-// View from orbit: the selected satellite's model with the Earth below, from a chase camera or from on board.
+// View from orbit: the selected satellite's model with the Earth below, from a chase camera (fixed 60 deg field).
 // Frames: TEME km for the Earth and other objects, metres around the satellite for its model; stars and planets
 // rotated from J2000 into the true equator of date (~TEME).
 import * as THREE from '../vendor/three.module.min.js';
 import { makeEarth } from './earth.js';
-import { makeStars, makeMoon, makePlanets, milkyWayPhoto, makeFaintStars, starMaterial, SUNSPOTS, sunMapTexture, sunPrimeMeridian } from './sky.js';
+import { makeStars, makeMoon, makePlanets, milkyWayPhoto, makeFaintStars, starMaterial, SUNSPOTS, sunMapTexture, sunPrimeMeridian, eclipseUniforms } from './sky.js';
+import { SOLAR_GLSL, sunMoonTEME, sunCovered, lunarShadow, setEarthEclipse } from './eclipse.js';
 import { buildModel, poseModel, disposeModel } from './models3d.js';
 import { gmst, sunTEME, moonTEME, DEG } from './frames.js';
 import { propagate } from './sgp.js';
@@ -19,13 +20,14 @@ export class SpaceView {
     this.app = app; this.r = renderer;
     this.earth = makeEarth();
     this.cam = new THREE.PerspectiveCamera(60, 1, 0.1, 1e6); this.cam.up.set(0, 0, 1);
-    this.yaw = 200; this.pitch = 12; this.dist = 3; this.fov = 60; this.onboard = false;
+    this.yaw = 200; this.pitch = 12; this.dist = 3; this.fov = 60;
     const U = this.U = {
       uSkyLUT: { value: blackTex() }, uSkyLUTLow: { value: blackTex() }, uExposure: { value: 1 }, uSunDir: { value: new THREE.Vector3() }, uMoonDir: { value: new THREE.Vector3() },
       uSunE: { value: new THREE.Vector3(1.27e5, 1.25e5, 1.2e5) }, uMoonE: { value: new THREE.Vector3() }, uAOD: { value: 0 }, uTime: { value: 0 }, uRefrK: { value: 0 }, uSunSquish: { value: 1 }, uMoonSquish: { value: 1 },
       uNight: { value: 0 }, uSnow: { value: 0 }, uWet: { value: 0 }, uVisKm: { value: 100 }, uOvercast: { value: 0 }, uFlash: { value: new THREE.Vector4() }, uNoAtm: { value: 1 },
       uCamKm: { value: new THREE.Vector3() }, uViewport: { value: new THREE.Vector2() }, uSunW: { value: 0 }, uSunMap: { value: sunMapTexture() }, uEqToWorld: { value: new THREE.Matrix3() }, uMW: { value: milkyWayPhoto() }, uGal: { value: new THREE.Matrix3().set(...EQ2GAL) }, uInvProjView: { value: new THREE.Matrix4() }, uCamPos: { value: new THREE.Vector3() },
     };
+    eclipseUniforms(U);
     this.sky = new THREE.Scene();
     this.sky.add(this.bgMesh());
     this.stars = makeStars(U, assets.stars); this.sky.add(this.stars);
@@ -51,8 +53,9 @@ export class SpaceView {
     const m = new THREE.ShaderMaterial({
       uniforms: this.U, depthTest: false, depthWrite: false,
       vertexShader: `out vec3 vDir; uniform mat4 uInvProjView; uniform vec3 uCamPos; void main(){ vec4 w = uInvProjView * vec4(position.xy, 0.5, 1.0); vDir = w.xyz/w.w - uCamPos; gl_Position = vec4(position.xy, 1.0, 1.0); }`,
-      fragmentShader: `in vec3 vDir; uniform sampler2D uMW; uniform mat3 uEqToWorld, uGal; uniform vec3 uSunDir, uSunE; uniform float uExposure;
+      fragmentShader: `in vec3 vDir; uniform sampler2D uMW; uniform mat3 uEqToWorld, uGal; uniform vec3 uSunDir, uSunE, uMoonDir; uniform float uExposure, uMoonRadius;
         ${SUNSPOTS}
+        ${SOLAR_GLSL}
         uniform vec2 uViewport; uniform mat4 uInvProjView; uniform vec3 uCamKm;
         void main(){ vec3 d = normalize(vDir);
           if (uViewport.x > 0.0) { vec4 wp = uInvProjView * vec4(gl_FragCoord.xy/uViewport*2.0 - 1.0, 0.5, 1.0); d = normalize(wp.xyz/wp.w); }
@@ -60,10 +63,12 @@ export class SpaceView {
           vec2 uv = vec2(0.5 - gl/6.2831853, 0.5 + gb/3.14159265); vec2 gx = dFdx(uv), gy = dFdy(uv); gx.x -= floor(gx.x + 0.5); gy.x -= floor(gy.x + 0.5);
           vec3 mw = textureGrad(uMW, uv, gx, gy).rgb; mw *= mw;
           vec3 col = mw*1.3e-3*1.25*uExposure;
-          float r = acos(clamp(dot(d, uSunDir), -1.0, 1.0)), R = 0.00465;
-          if (r < R) { float mu = sqrt(1.0 - (r/R)*(r/R)); vec3 Tsun = vec3(1.0); { float b = dot(uCamKm, d); if (b < 0.0) { float hg = length(uCamKm - d*b) - 6371.0; if (hg < 0.0) Tsun = vec3(0.0); else if (hg < 150.0) { float xr = exp(-hg/8.0)*70.8, xa = exp(-hg/1.2)*182.9; Tsun = exp(-(vec3(0.10, 0.17, 0.33)*xr + vec3(0.12, 0.13, 0.14)*xa)) / (1.0 + 6.0*exp(-hg/8.0)); } } } vec3 sH = normalize(cross(uSunDir, abs(uSunDir.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0))), sV = cross(sH, uSunDir); vec2 uv = vec2(dot(d, sH), dot(d, sV))/R; vec3 nW = normalize(sH*uv.x + sV*uv.y - uSunDir*sqrt(max(0.0, 1.0 - dot(uv, uv)))); col += uSunE*Tsun*2.15e4*(0.4 + 0.6*mu)*sunspots(transpose(uEqToWorld)*nW, mu)*uExposure; }
-          // faint zodiacal-free solar corona glow in the eye/lens
-          col += uSunE*uExposure*2.0e-7/(pow(r/R, 2.5) + 0.2);
+          float r = atan(length(cross(d, uSunDir)), dot(d, uSunDir)), R = 0.00465;
+          vec3 mF = normalize(uMoonDir), mH = normalize(cross(mF, abs(mF.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0)));
+          float occ = r < R*14.0 ? notMoon(d, mH, cross(mH, mF)) : 1.0;
+          if (r < R) { float mu = sqrt(1.0 - (r/R)*(r/R)); vec3 Tsun = vec3(1.0); { float b = dot(uCamKm, d); if (b < 0.0) { float hg = length(uCamKm - d*b) - 6371.0; if (hg < 0.0) Tsun = vec3(0.0); else if (hg < 150.0) { float xr = exp(-hg/8.0)*70.8, xa = exp(-hg/1.2)*182.9; Tsun = exp(-(vec3(0.10, 0.17, 0.33)*xr + vec3(0.12, 0.13, 0.14)*xa)) / (1.0 + 6.0*exp(-hg/8.0)); } } } vec3 sH = normalize(cross(uSunDir, abs(uSunDir.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0))), sV = cross(sH, uSunDir); vec2 uv = vec2(dot(d, sH), dot(d, sV))/R; vec3 nW = normalize(sH*uv.x + sV*uv.y - uSunDir*sqrt(max(0.0, 1.0 - dot(uv, uv)))); col += uSunE*Tsun*2.15e4*(0.4 + 0.6*mu)*sunspots(transpose(uEqToWorld)*nW, mu)*uExposure*occ; }
+          // corona and chromosphere (a millionth of the disc: they show when the Moon covers the Sun)
+          if (r < R*14.0) { vec3 sH2 = normalize(cross(uSunDir, vec3(0.0, 0.0, 1.0))); float th = atan(dot(d, cross(sH2, uSunDir)), dot(d, sH2)); col += uSunE*2.15e4*(vec3(1.0, 0.97, 0.93)*corona(r/R, th) + chromo(r/R, th))*uExposure*occ; }
           gl_FragColor = vec4(min(col, vec3(3.0e4)), 1.0); }`,
     });
     const mesh = new THREE.Mesh(g, m); mesh.frustumCulled = false; mesh.renderOrder = -100; return mesh;
@@ -82,8 +87,10 @@ export class SpaceView {
     const r = [st[0], st[1], st[2]], v = [st[3], st[4], st[5]];
     const rv = new THREE.Vector3(...r), up = rv.clone().normalize(), vel = new THREE.Vector3(...v);
     const fwd = vel.clone().addScaledVector(up, -vel.dot(up)).normalize(), right = fwd.clone().cross(up);
-    const s = sunTEME(ms), sun = new THREE.Vector3(s[0], s[1], s[2]);
-    const mp = moonTEME(ms), moonV = new THREE.Vector3(...mp).sub(rv), moonD = moonV.length(); moonV.normalize();
+    // precise Sun and Moon (astronomy-engine): eclipses and the Moon's shadow on the Earth fall in the right place
+    const smp = sunMoonTEME(ms), sDist = Math.hypot(...smp.sun), s = [smp.sun[0] / sDist, smp.sun[1] / sDist, smp.sun[2] / sDist]; s.dist = sDist;
+    const sun = new THREE.Vector3(s[0], s[1], s[2]);
+    const mp = smp.moon, moonV = new THREE.Vector3(...mp).sub(rv), moonD = moonV.length(); moonV.normalize();
     // model
     if (this.modelIdx !== i) {
       if (this.model) { this.mScene.remove(this.model); disposeModel(this.model); }
@@ -96,12 +103,11 @@ export class SpaceView {
     this.model.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3(...B.x), new THREE.Vector3(...B.y), new THREE.Vector3(...B.z)));
     this.model.position.set(0, 0, 0);
     poseModel(this.model, [B.x[0] * s[0] + B.x[1] * s[1] + B.x[2] * s[2], B.y[0] * s[0] + B.y[1] * s[1] + B.y[2] * s[2], B.z[0] * s[0] + B.z[1] * s[1] + B.z[2] * s[2]]);
-    // camera: chase (orbits the model in its local horizon frame) or on board (looking out from the satellite)
+    // camera: chase (orbits the model in its local horizon frame) at a fixed, natural field of view
     const cy = Math.cos(this.yaw * DEG), sy = Math.sin(this.yaw * DEG), cp = Math.cos(this.pitch * DEG), sp = Math.sin(this.pitch * DEG);
     const dirL = fwd.clone().multiplyScalar(cp * cy).addScaledVector(right, cp * sy).addScaledVector(up, sp);
-    const cam = this.cam; cam.fov = this.fov; cam.aspect = w / h; cam.up.copy(up);
-    if (this.onboard) { cam.position.set(0, 0, 0).addScaledVector(up, this.shape.size * 0.05); cam.lookAt(dirL.clone().multiplyScalar(-1e3)); cam.near = 0.05; cam.far = 1e7; }
-    else { cam.position.copy(dirL).multiplyScalar(this.dist); cam.lookAt(0, 0, 0); cam.near = Math.max(0.05, this.dist - this.shape.size * 1.2); cam.far = this.dist + this.shape.size * 3; }
+    this.fov = 60; const cam = this.cam; cam.fov = this.fov; cam.aspect = w / h; cam.up.copy(up);
+    cam.position.copy(dirL).multiplyScalar(this.dist); cam.lookAt(0, 0, 0); cam.near = Math.max(0.05, this.dist - this.shape.size * 1.2); cam.far = this.dist + this.shape.size * 3;
     if (cam.near >= cam.far) cam.near = cam.far * 0.01;
     cam.updateProjectionMatrix(); cam.updateMatrixWorld();
     // sky camera (direction only) and Earth camera (km, TEME)
@@ -111,8 +117,17 @@ export class SpaceView {
     // ray directions from a rotation-only matrix (skyCam sits at the origin); the camera position is separate, so no
     // large numbers cancel in float32 (that made the Earth jitter, worst from GEO)
     E.uCam.value.copy(camKm); E.uInvPV.value.copy(skyCam.projectionMatrixInverse).premultiply(skyCam.matrixWorld);
-    E.uSun.value.copy(sun); E.uMoon.value.copy(new THREE.Vector3(...mp).normalize()); E.uG.value = gmst(ms); E.uTime.value = (ms / 1000) % 1e5;
-    E.uMoonE.value = Math.pow(10, -0.4 * (this.app.moonMag + 13.99)) || 0.1;
+    E.uSun.value.copy(sun); E.uG.value = gmst(ms); E.uTime.value = (ms / 1000) % 1e5;
+    setEarthEclipse(E, smp, Math.pow(10, -0.4 * (this.app.moonMag + 13.99)) || 0.1);
+    // eclipses seen from here: the Earth's shadow on the Moon, and how much of the Sun the Moon covers
+    const rel = (a) => [a[0] - r[0], a[1] - r[1], a[2] - r[2]];
+    const ls = lunarShadow(rel(smp.sun), rel(mp), [-r[0], -r[1], -r[2]]);
+    if (ls && ls.depth > 1e-4) { U.uLunAx.value.set(...ls.dir); U.uLunR.value.set(ls.umb, ls.pen); U.uLunAvg.value.set(1, 1 - 0.7 * ls.red, 1 - 0.85 * ls.red).multiplyScalar(ls.mean); }
+    else { U.uLunR.value.set(0, 0); U.uLunAvg.value.set(1, 1, 1); }
+    const sRel = rel(smp.sun), sRelD = Math.hypot(...sRel), sDirSat = [sRel[0] / sRelD, sRel[1] / sRelD, sRel[2] / sRelD];
+    const cover = sunCovered(sDirSat, sRelD, [moonV.x, moonV.y, moonV.z], moonD), open1 = 1 - cover;
+    U.uMoonOcc.value = dot3(moonV, sun) > Math.cos(2 * DEG) ? 1 : 0; this.sunOpen = open1;
+    U.uMoonCap.value = 1.3;   // like the eye: bright but not blown out into a glowing ball
     // sky uniforms
     const eq = this.eqToTeme(ms); U.uEqToWorld.value.set(...eq); U.uSunW.value = sunPrimeMeridian(ms);
     U.uSunDir.value.copy(sun); U.uMoonDir.value.copy(moonV);
@@ -129,8 +144,8 @@ export class SpaceView {
     if ((this.fn = (this.fn || 0) + 1) % 6 === 1) this.measure();
     const L = sunlight(r, s, s.dist, [1, 1, 1]), Lv = 0.2126 * L[0] + 0.7152 * L[1] + 0.0722 * L[2];
     let La = Math.max(this.earthLa || 1e-3, 2e-4);
-    if (!this.onboard) La = Math.max(La, Lv * 1.27e5 * 0.6 / Math.PI * 0.35 * clamp(this.shape.size / this.dist, 0.15, 1));
-    if (dot3(sun, skyDir(skyCam)) > Math.cos(cam.fov * DEG * 0.6)) La = Math.max(La, 3000);
+    La = Math.max(La, Lv * 1.27e5 * 0.6 / Math.PI * 0.35 * clamp(this.shape.size / this.dist, 0.15, 1));
+    if (dot3(sun, skyDir(skyCam)) > Math.cos(cam.fov * DEG * 0.6)) La = Math.max(La, 3000 * Math.max(open1, 2e-4));   // eclipsed Sun: exposure opens for the corona
     this.adapt = Math.exp(lerp(Math.log(this.adapt), Math.log(La), 1 - Math.exp(-dt * 2.5)));
     // camera-like exposure (photographs from orbit): mid-tones of what is lit map to ~0.8
     let Ex = 0.8 / this.adapt * Math.pow(2, app.ev);
@@ -141,7 +156,7 @@ export class SpaceView {
     // lights on the model
     const es = earthshine(r, s);
     this.sunL.position.copy(sun).multiplyScalar(this.shape.size * 2); this.sunL.target.position.set(0, 0, 0);
-    this.sunL.color.setRGB(L[0] / Math.max(Lv, 1e-6), L[1] / Math.max(Lv, 1e-6), L[2] / Math.max(Lv, 1e-6)); this.sunL.intensity = 1.27e5 * Lv * Ex;
+    this.sunL.color.setRGB(L[0] / Math.max(Lv, 1e-6), L[1] / Math.max(Lv, 1e-6), L[2] / Math.max(Lv, 1e-6)); this.sunL.intensity = 1.27e5 * Lv * Ex * open1;
     this.esL.position.copy(up).multiplyScalar(-this.shape.size * 2); this.esL.target.position.set(0, 0, 0); this.esL.intensity = 1.27e5 * es * Ex * 0.8;
     this.amb.intensity = 1.27e5 * Ex * (es * 0.15 + 2e-8);
     // other satellites near this one (within 3000 km), with their brightness as seen from here
@@ -170,9 +185,9 @@ export class SpaceView {
           this.ray.set(cam.position, dir); this.ray.far = 1e5;
           const w = q < 0 ? 2 : 1; tot += w; if (!this.ray.intersectObject(this.model, true).length) open += w;
         }
-        const blockF = open / tot;
+        const blockF = open / tot * open1;
         const k = f * blockF * clamp((this.fov - 3) / 7, 0, 1) * clamp(Tl * 15, 0, 1) * 0.55 / Math.max(Tl, 1e-4);
-        app.post.sunStar([(v.x * 0.5 + 0.5) * W, (v.y * 0.5 + 0.5) * H], [tint[0] * k, tint[1] * k, tint[2] * k], Math.min(W, H) * 0.16);
+        app.post.sunStar([(v.x * 0.5 + 0.5) * W, (v.y * 0.5 + 0.5) * H], [tint[0] * k, tint[1] * k, tint[2] * k], Math.min(W, H) * 0.16, 0, 1);
       }
     }
     app.post.finish();

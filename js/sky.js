@@ -2,6 +2,13 @@
 // (Rayleigh, Mie, ozone, Earth's shadow); then stars, planets, Milky Way, Moon. No airglow, aurora or light pollution.
 import * as THREE from '../vendor/three.module.min.js';
 import { COMMON, REFR } from './glsl.js';
+import { SOLAR_GLSL, LUNAR_GLSL } from './eclipse.js';
+// eclipse uniforms shared by the Sun, the Moon and the sky (defaults: nothing in front of the Sun, no lunar eclipse)
+export function eclipseUniforms(U) {
+  if (U.uMoonOcc) return;
+  Object.assign(U, { uMoonOcc: { value: 0 }, uOcc1: { value: new THREE.Vector4() }, uOcc2: { value: new THREE.Vector4() }, uSunDiscK: { value: 1 }, uLunAx: { value: new THREE.Vector3(0, 0, 1) }, uLunR: { value: new THREE.Vector2() } });
+  if (!U.uMoonRadius) U.uMoonRadius = { value: 0.0045 };
+}
 
 const FSQ = new THREE.BufferGeometry();
 FSQ.setAttribute('position', new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
@@ -168,13 +175,15 @@ export function lpSkyTexture(lp) {
 export function makeSkyBackground(U, mwTex) {
   Object.assign(U, { uViewport: { value: new THREE.Vector2() }, uSunW: { value: 0 }, uSunMap: { value: sunMapTexture() }, uMW: { value: mwTex }, uEqToWorld: { value: new THREE.Matrix3() }, uGal: { value: new THREE.Matrix3() }, uInvProjView: { value: new THREE.Matrix4() }, uCamPos: { value: new THREE.Vector3() }, uMWScale: { value: 1 },
     uAurora: { value: new THREE.Vector4() }, uAurP: { value: (() => { const t = new THREE.DataTexture(new Uint8Array(4), 1, 1); t.needsUpdate = true; return t; })() }, uENU: { value: new THREE.Matrix3() }, uObsECEF: { value: new THREE.Vector3(0, 0, 6371) }, uMagAxis: { value: new THREE.Vector3(0, 0, 1) } });
+  eclipseUniforms(U);
   const mat = new THREE.ShaderMaterial({
     uniforms: U, depthTest: false, depthWrite: false,
     vertexShader: `out vec3 vDir; uniform mat4 uInvProjView; uniform vec3 uCamPos;
       void main(){ vec4 w = uInvProjView * vec4(position.xy, 0.5, 1.0); vDir = w.xyz/w.w - uCamPos; gl_Position = vec4(position.xy, 1.0, 1.0); }`,
     fragmentShader: COMMON + /* glsl */`
-      in vec3 vDir; uniform sampler2D uMW; uniform mat3 uEqToWorld, uGal; uniform float uMWScale, uSunSquish;
+      in vec3 vDir; uniform sampler2D uMW; uniform mat3 uEqToWorld, uGal; uniform float uMWScale, uSunSquish, uSunDiscK, uMoonRadius;
       ${SUNSPOTS}
+      ${SOLAR_GLSL}
       uniform vec2 uViewport; uniform mat4 uInvProjView; uniform vec3 uCamPos;
       void main(){
         // the view direction from this pixel's exact screen position: an interpolated direction is too coarse when
@@ -190,6 +199,14 @@ export function makeSkyBackground(U, mwTex) {
         vec3 sH = cross(uSunDir, sV);
         float r = atan(length(vec2(dot(d, sH), dot(d, sV)/uSunSquish)), dot(d, uSunDir));
         float R = 0.00465;
+        // the Moon (and Mercury or Venus in transit) in front of the Sun
+        vec3 mF = normalize(uMoonDir), mV = vec3(0.0, 1.0, 0.0) - mF*mF.y; mV = dot(mV, mV) > 1e-8 ? normalize(mV) : vec3(1.0, 0.0, 0.0);
+        float occ = r < R*14.0 ? notMoon(d, cross(mF, mV), mV) : 1.0;
+        if (r < R*14.0 && sh > -0.02) {
+          // corona and chromosphere: always there, a millionth of the disc, so only seen when the Moon covers it all
+          float rr = r/R, th = atan(dot(d, sV), dot(d, sH));
+          col += uSunE*uSunDiscK*2.15e4*(vec3(1.0, 0.97, 0.93)*corona(rr, th) + chromo(rr, th))*directT(uSunDir.y)*uExposure*occ*smoothstep(-0.02, 0.0, sh);
+        }
         if (r < R*1.6 && sh > -0.02) {
           float mu = sqrt(max(0.0, 1.0 - (r/R)*(r/R)));
           float limb = r < R ? (0.4 + 0.6*mu) : 0.0;
@@ -198,7 +215,7 @@ export function makeSkyBackground(U, mwTex) {
             vec3 nW = normalize(sH*uv.x + sV*uv.y - uSunDir*sqrt(max(0.0, 1.0 - dot(uv, uv))));
             limb *= sunspots(transpose(uEqToWorld)*nW, mu);
           }
-          col += uSunE * 2.15e4 * limb * directT(uSunDir.y) * uExposure * smoothstep(-0.02, 0.0, sh);
+          col += uSunE * uSunDiscK * 2.15e4 * limb * occ * directT(uSunDir.y) * uExposure * smoothstep(-0.02, 0.0, sh);
         }
         // Milky Way from an all-sky photograph (ESO/S. Brunier), stars removed, mapped in galactic coordinates
         // (coordinates and their screen derivatives outside the branch, where derivatives are well defined)
@@ -339,7 +356,8 @@ export function bvToRGB(bv) {
 
 // Moon: lit sphere with procedural maria, correct phase from the true Sun direction, earthshine, extinction.
 export function makeMoon(U) {
-  Object.assign(U, { uMoonLight: { value: new THREE.Vector3() }, uMoonRadius: { value: 0.0045 }, uMoonLum: { value: 2500 }, uMoonGain: { value: 1 }, uMoonAvg: { value: 0 }, uMoonCam: { value: 0 }, uMoonMapOK: { value: 0 } });
+  eclipseUniforms(U);
+  Object.assign(U, { uMoonLight: { value: new THREE.Vector3() }, uMoonRadius: { value: 0.0045 }, uMoonLum: { value: 2500 }, uMoonGain: { value: 1 }, uMoonAvg: { value: 0 }, uMoonCam: { value: 0 }, uMoonMapOK: { value: 0 }, uMoonCap: { value: 3.5 }, uLunAvg: { value: new THREE.Vector3(1, 1, 1) } });
   // real albedo map: NASA LRO (SVS CGI Moon Kit, public domain), reduced to 512x256 greyscale (30 KB)
   U.uMoonMap = { value: new THREE.TextureLoader().load('data/moon.jpg', t => { t.wrapS = THREE.RepeatWrapping; t.needsUpdate = true; U.uMoonMapOK.value = 1; }) };
   const geo = new THREE.PlaneGeometry(2, 2);
@@ -367,7 +385,8 @@ export function makeMoon(U) {
         #include <logdepthbuf_vertex>
       }`,
     fragmentShader: COMMON + /* glsl */`
-      in vec2 vP; in float vQ; uniform vec3 uMoonLight; uniform float uMoonLum, uMoonGain, uMoonAvg, uPxSr, uMoonRadius, uMoonCam, uMoonMapOK; uniform mat3 uEqToWorld; uniform sampler2D uMoonMap;
+      in vec2 vP; in float vQ; uniform vec3 uMoonLight, uLunAvg; uniform float uMoonLum, uMoonGain, uMoonAvg, uPxSr, uMoonRadius, uMoonCam, uMoonMapOK, uMoonCap; uniform mat3 uEqToWorld; uniform sampler2D uMoonMap;
+      ${LUNAR_GLSL}
       #include <logdepthbuf_pars_fragment>
       void main(){
         #include <logdepthbuf_fragment>
@@ -391,19 +410,23 @@ export function makeMoon(U) {
         // by the quarter, effectively gone at gibbous
         float bE = PI - acos(clamp(dot(uMoonLight, -f), -1.0, 1.0));
         float earthshine = uMoonLum * 1.32e-4 * alb/0.12 * (sin(bE) + (PI - bE)*cos(bE))/PI;
-        det = vec3(1.0, 0.95, 0.88) * (L + earthshine) * T * uExposure * smoothstep(1.0, 0.96, r2);
+        // a lunar eclipse: the Earth's penumbra and red umbra on this point of the disc (earthshine is gone too: the
+        // Earth then shows the Moon its night side)
+        vec3 lsh = lunarShade(normalize(f + (rr*q.x + uu*q.y)*uMoonRadius));
+        det = vec3(1.0, 0.95, 0.88) * (L + earthshine*min(lsh.g, 1.0)) * lsh * T * uExposure * smoothstep(1.0, 0.96, r2);
         }
         // only a few pixels across: shade the disc evenly with its mean brightness for this phase (spread over at
         // least ~1.5 px), so its whole light reaches the image; a thin crescent no longer falls between pixel samples
         float Rs = max(uMoonRadius, 1.5*sqrt(uPxSr)), ks = uMoonRadius/Rs;
         vec2 qs = q*ks;
-        vec3 avg = dot(qs, qs) <= 1.0 ? vec3(1.0, 0.95, 0.88) * uMoonAvg * ks*ks * T * uExposure : vec3(0.0);
-        float w = smoothstep(3.0, 8.0, uMoonRadius/sqrt(uPxSr));
+        vec3 avg = dot(qs, qs) <= 1.0 ? vec3(1.0, 0.95, 0.88) * uMoonAvg * uLunAvg * ks*ks * T * uExposure : vec3(0.0);
+        // the even disc only below ~2 px radius: from there up the true phase shape shows (a crescent is a crescent)
+        float w = smoothstep(1.0, 2.2, uMoonRadius/sqrt(uPxSr));
         vec3 c = mix(avg, det, w);
         // the eye's wide dynamic range: the disc is only slightly overexposed (sunlit surface just past white,
         // maria still visible); a camera exposing for the night sky blows it out
         float peak = mix(uMoonAvg*ks*ks, uMoonLum*uMoonGain, w) * dot(T, vec3(0.2126, 0.7152, 0.0722)) * uExposure;
-        c *= mix(min(1.0, 3.5/max(peak, 1e-6)), 1.0, uMoonCam);
+        c *= mix(min(1.0, uMoonCap/max(peak, 1e-6)), 1.0, uMoonCam);
         // camera: glare from lens and sensor around the overexposed Moon, scaled by its total light
         if (uMoonCam > 0.0) {
           // fades in exactly as the disc's soft limb fades out, so there is no dark ring between them

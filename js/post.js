@@ -23,7 +23,8 @@ export class Post {
         vec3 b2 = (texture(tB2, vUv + o2*vec2(1,1)).rgb + texture(tB2, vUv + o2*vec2(-1,1)).rgb + texture(tB2, vUv + o2*vec2(1,-1)).rgb + texture(tB2, vUv - o2).rgb)*0.25;
         vec3 c = safeC(texture(t, vUv).rgb) + (safeC(b1)*0.06 + safeC(b2)*0.05)*uBloom;
         float L = dot(c, vec3(0.2126, 0.7152, 0.0722));
-        c = mix(c, vec3(L)*vec3(0.78, 0.92, 1.18), uScot);
+        // rod vision greys what is faint; anything bright enough for the cones (a red eclipsed Moon, Mars) keeps its colour
+        c = mix(c, vec3(L)*vec3(0.78, 0.92, 1.18), uScot*(1.0 - smoothstep(0.25, 1.2, L)));
         c = pow(tm(max(c, 0.0)), vec3(1.0/2.2));
         float n1 = fract(52.9829189*fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
         float n2 = fract(52.9829189*fract(dot(gl_FragCoord.xy + vec2(17.3, 41.7), vec2(0.00583715, 0.06711056))));
@@ -32,16 +33,18 @@ export class Post {
   }
   // Sun star: diffraction spikes from the eye's/camera's aperture, drawn additively around the Sun's screen position.
   // pos: pixel position in the render target; col: RGB strength (0 = off); len: spike length (px)
-  sunStar(pos, col, len, flare = 0) {   // lens flare off by default (the user found it distracting)
+  // veil > 0: the glare covers what is behind it (premultiplied 'over'), so it reads as in front of a nearby model
+  // instead of a faint additive overlay that the model shows through
+  sunStar(pos, col, len, flare = 0, veil = 0) {   // lens flare off by default (the user found it distracting)
     if (!this.star) {
       const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
       const mat = new THREE.ShaderMaterial({
-        uniforms: { uC: { value: new THREE.Vector2() }, uCen: { value: new THREE.Vector2() }, uCol: { value: new THREE.Vector3() }, uLen: { value: 100 }, uRot: { value: 0.3 }, uFlare: { value: 1 } },
-        depthTest: false, depthWrite: false, transparent: true, blending: THREE.AdditiveBlending,
+        uniforms: { uC: { value: new THREE.Vector2() }, uCen: { value: new THREE.Vector2() }, uCol: { value: new THREE.Vector3() }, uLen: { value: 100 }, uRot: { value: 0.3 }, uFlare: { value: 1 }, uVeil: { value: 0 } },
+        depthTest: false, depthWrite: false, transparent: true, blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor, blendSrcAlpha: THREE.ZeroFactor, blendDstAlpha: THREE.OneFactor,
         vertexShader: 'void main(){ gl_Position = vec4(position.xy, 0.0, 1.0); }',
         // The eye's glare around a bright point (ciliary corona): many fine needle rays of uneven length and strength
         // radiating from a soft halo, instead of a camera's few hard spikes.
-        fragmentShader: `uniform vec2 uC, uCen; uniform vec3 uCol; uniform float uLen, uRot, uFlare;
+        fragmentShader: `uniform vec2 uC, uCen; uniform vec3 uCol; uniform float uLen, uRot, uFlare, uVeil;
           float h1(float x){ return fract(sin(x*127.1)*43758.5453); }
           float n1(float x){ float i = floor(x), f = fract(x); f = f*f*(3.0 - 2.0*f); return mix(h1(i), h1(i + 1.0), f); }
           void main(){
@@ -71,14 +74,15 @@ export class Post {
                 c += tc[i]*uCol*aa[i]*(disc*0.6 + rim*0.8)*uFlare;
               }
             }
-            gl_FragColor = vec4(min(c, vec3(60.0)), 1.0);
+            c = min(c, vec3(60.0));
+            gl_FragColor = vec4(c, uVeil*clamp(dot(c, vec3(0.2126, 0.7152, 0.0722))*1.5, 0.0, 0.97));
           }`,
       });
       const m = new THREE.Mesh(g, mat); m.frustumCulled = false; this.star = new THREE.Scene(); this.star.add(m); this.starU = mat.uniforms;
     }
     if (!(col[0] + col[1] + col[2] > 0.001)) return;
     this.starU.uC.value.set(pos[0], pos[1]); this.starU.uCol.value.set(col[0], col[1], col[2]); this.starU.uLen.value = len;
-    this.starU.uCen.value.set(this.rt.width / 2, this.rt.height / 2); this.starU.uFlare.value = flare;
+    this.starU.uCen.value.set(this.rt.width / 2, this.rt.height / 2); this.starU.uFlare.value = flare; this.starU.uVeil.value = veil;
     this.r.setRenderTarget(this.rt); this.r.render(this.star, CAM);
   }
   size(w, h) {

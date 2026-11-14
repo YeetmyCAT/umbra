@@ -209,10 +209,19 @@ function conjunctions(m) {
   ps.forEach((p, pi) => {
     const a = Math.max(p.rise, m.t0), b = p.set; if (b <= a) return;
     // 1) coarse: every object, every 30 s; keep those within 25 deg of the selected object's direction at any step
-    const cand = new Set();
+    const cand = new Set(), skip = new Set();
     for (let t = a; t <= b; t += 30e3) {
       if (dirAt(i0, t, u0) < 0) continue;
-      for (let i = 0; i < N; i++) { if (i === i0 || !recs[i]) continue; if (dirAt(i, t, u1) < 0) continue; if (u0[0] * u1[0] + u0[1] * u1[1] + u0[2] * u1[2] > 0.906) cand.add(i); }
+      const r0x = u0[0] * u0.r, r0y = u0[1] * u0.r, r0z = u0[2] * u0.r;
+      for (let i = 0; i < N; i++) {
+        if (i === i0 || !recs[i] || skip.has(i)) continue;
+        if (meta[i] && (meta[i].id === o0.id || (o0.cospar && meta[i].cospar === o0.cospar))) { skip.add(i); continue; }   // itself (duplicate entries), or the same object under another name
+        if (dirAt(i, t, u1) < 0) continue;
+        // docked vehicles and anything flying in formation with it (within 20 km) are not separate events
+        const dx = u1[0] * u1.r - r0x, dy = u1[1] * u1.r - r0y, dz = u1[2] * u1.r - r0z;
+        if (dx * dx + dy * dy + dz * dz < 400) { cand.delete(i); skip.add(i); continue; }
+        if (u0[0] * u1[0] + u0[1] * u1[1] + u0[2] * u1[2] > 0.906) cand.add(i);
+      }
     }
     // 2) fine: candidates every 2 s, closest approach between steps from the change in relative direction
     for (const i of cand) {

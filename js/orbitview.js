@@ -3,6 +3,7 @@
 import * as THREE from '../vendor/three.module.min.js';
 import { makeEarth, meterEarth } from './earth.js';
 import { gmst, sunTEME, ecefToTeme, DEG } from './frames.js';
+import { sunMoonTEME, setEarthEclipse } from './eclipse.js';
 import { propagate } from './sgp.js';
 
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
@@ -54,7 +55,7 @@ export class OrbitView {
     if ((this.fn = (this.fn || 0) + 1) % 8 === 1) { const m = meterEarth(this.r, this.earth, cam); if (m) this.la = m.La; }
     this.adapt = Math.exp((Math.log(this.adapt || 3000) * 0.85 + Math.log(Math.max(this.la || 3000, 2e-3)) * 0.15));
     E.uExposure.value = Math.min(0.8 / this.adapt, 3) * Math.pow(2, app.ev);
-    E.uMoonE.value = 0.1;
+    try { const smp = sunMoonTEME(ms); E.uSun.value.set(...smp.sun).normalize(); setEarthEclipse(E, smp, Math.pow(10, -0.4 * (app.moonMag + 13.99)) || 0.1); } catch { E.uMoonE.value = 0.1; }
     // dots
     const g = this.pts.geometry, P = g.attributes.position.array, Lt = g.attributes.lit.array, S = g.attributes.show.array, f = app.filter;
     for (let i = 0; i < T.N; i++) {

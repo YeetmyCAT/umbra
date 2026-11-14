@@ -18,21 +18,22 @@ const panel = (o) => ({ t: 'panel', front: 'cell', back: 'cellBack', track: 0, .
 // ---------------- crewed stations ----------------
 function issParts() {
   const P = [];
-  // Integrated truss: S0 at the centre above Destiny, out to S6/P6 (109 m)
-  P.push(truss(4.6, 13.4, 3.2, [0, 0, -4.6]));
+  // Integrated truss: S0 at the centre, sitting on Destiny, out to S6/P6 (109 m); every segment touches the next
+  P.push(truss(4.6, 13.4, 3.2, [0, 0, -3.8]));
   for (const sg of [1, -1]) {
-    P.push(truss(4.0, 16, 3.0, [0, sg * 14.7, -4.6]));
-    P.push(truss(3.6, 10, 2.8, [0, sg * 27.5, -4.6]));
-    P.push(truss(3.0, 22, 2.6, [0, sg * 44, -4.6]));
+    P.push(truss(4.0, 16, 3.0, [0, sg * 14.7, -3.8]));
+    P.push(truss(3.6, 10, 2.8, [0, sg * 27.5, -3.8]));
+    P.push(truss(3.0, 22, 2.6, [0, sg * 43.4, -3.8]));
     // four solar array wings per side (P4/P6, S4/S6), two-axis Sun tracking (SARJ about the truss + BGA)
     for (const yy of [37.6, 51.0]) for (const zs of [1, -1]) {
-      P.push(panel({ c: [0, sg * yy, -4.6 + zs * 20], piv: [0, sg * yy, -4.6], off: zs * 20, a: Z, n0: X, wa: 34.0, wb: 11.6, track: 2, g: Y, front: 'cellGold', back: 'cellBack', grid: 1 }));
+      P.push(panel({ c: [0, sg * yy, -3.8 + zs * 20], piv: [0, sg * yy, -3.8], off: zs * 20, a: Z, n0: X, wa: 34.0, wb: 11.6, track: 2, g: Y, front: 'cellGold', back: 'cellBack', grid: 1 }));
       // iROSA roll-out arrays added 2021-2023, mounted over the inner half of the wings
-      P.push(panel({ c: [0, sg * yy, -4.6 + zs * 12], piv: [0, sg * yy, -4.6], off: zs * 12, a: Z, n0: X, wa: 18.3, wb: 6.0, track: 2, g: Y, front: 'cell', back: 'cellBackDark', lift: 0.9 }));
+      P.push(panel({ c: [0, sg * yy, -3.8 + zs * 12], piv: [0, sg * yy, -3.8], off: zs * 12, a: Z, n0: X, wa: 18.3, wb: 6.0, track: 2, g: Y, front: 'cell', back: 'cellBackDark', lift: 0.9 }));
     }
     // photovoltaic radiators at P4/S4 and the big heat-rejection radiators on S1/P1 (kept edge-on to the Sun)
     P.push(panel({ c: [0, sg * 37.6, -1.0], a: Y, n0: X, wa: 3.2, wb: 13, track: 0, front: 'white', back: 'white' }));
-    for (const k of [0, 1, 2]) P.push(panel({ c: [-2 - k * 1.2, sg * 15.5, 7 + k * 0.4], a: Y, n0: Z, wa: 3.4, wb: 23.3, track: 0, front: 'white', back: 'white', tilt: 0.5 }));
+    // three 3.4 x 23.3 m panels side by side on S1/P1, hinged at the truss and reaching out from it (aft and down)
+    for (const k of [0, 1, 2]) P.push(panel({ c: [-1 - 0.5 * 11.65, sg * (11 + k * 3.6), -2.4 + 0.866 * 11.65], a: Y, n0: [0.866, 0, 0.5], wa: 3.4, wb: 23.3, track: 0, front: 'white', back: 'white' }));
   }
   // US segment and partners (pressurised modules along x)
   P.push(cyl(2.15, 8.5, 'x', [0, 0, 0], 'beta'));                 // Destiny
@@ -40,14 +41,14 @@ function issParts() {
   P.push(cyl(1.0, 2.4, 'x', [13.4, 0, 0], 'alu'));                // PMA-2 / IDA
   P.push(cyl(2.2, 6.9, 'y', [8.6, 5.6, 0], 'beta'));              // Columbus
   P.push(cyl(2.2, 11.2, 'y', [8.6, -7.8, 0], 'beta'));            // Kibo JPM
-  P.push(box(4.5, 5.0, 3.8, [8.6, -16, 0], 'white'));            // Kibo exposed facility
+  P.push(box(4.5, 5.0, 3.8, [8.6, -15.8, 0], 'white'));            // Kibo exposed facility
   P.push(cyl(2.2, 3.0, 'z', [8.6, -9, -3.4], 'beta'));            // Kibo logistics
   P.push(cyl(2.25, 5.5, 'x', [-7, 0, 0], 'beta'));                // Unity
   P.push(cyl(2.2, 6.7, 'y', [-7, -5.6, 0], 'beta'));              // Tranquility
   P.push(cone(1.5, 1.0, 1.5, 'z', [-7, -6.5, 2.9], 'alu'));      // Cupola
   P.push(cyl(2.2, 6.4, 'z', [-7, 0, 4.8], 'beta'));               // Leonardo PMM
   P.push(cyl(2.0, 5.5, 'y', [-7, 4.6, 0], 'beta'));               // Quest airlock
-  P.push(box(2.5, 3.5, 2.0, [-7, 2.2, -3.4], 'beta'));            // BEAM
+  P.push(box(2.5, 3.5, 2.0, [-7, 2.2, -3.15], 'beta'));            // BEAM
   // Russian segment aft
   P.push(cyl(2.05, 12.6, 'x', [-16.8, 0, 0], 'white'));           // Zarya
   P.push(cyl(2.07, 13.1, 'x', [-29.6, 0, 0], 'white'));           // Zvezda
@@ -56,8 +57,8 @@ function issParts() {
   P.push(sph(1.7, [-25, 0, 15], 'white'));                        // Prichal
   P.push(cyl(1.0, 6, 'x', [-38.8, 0, 0], 'grey'));                // docked Progress/Soyuz at the aft port
   for (const sg of [1, -1]) {
-    P.push(panel({ c: [-31, sg * 9.5, 0], a: Y, n0: NZ, wa: 12.5, wb: 3.4, track: 1, front: 'cell', back: 'cellBack' }));   // Zvezda arrays
-    P.push(panel({ c: [-16, sg * 6.5, 0], a: Y, n0: NZ, wa: 8.0, wb: 3.3, track: 1, front: 'cell', back: 'cellBack' }));    // Zarya arrays (retracted remnants)
+    P.push(panel({ c: [-31, sg * 8.2, 0], a: Y, n0: NZ, wa: 12.5, wb: 3.4, track: 1, front: 'cell', back: 'cellBack' }));   // Zvezda arrays
+    P.push(panel({ c: [-16, sg * 5.95, 0], a: Y, n0: NZ, wa: 8.0, wb: 3.3, track: 1, front: 'cell', back: 'cellBack' }));    // Zarya arrays (retracted remnants)
   }
   return P;
 }

@@ -11,6 +11,7 @@ import { mulM3, DEG } from './frames.js';
 import { propagate } from './sgp.js';
 import { obsAt } from './sight.js';
 import { earthshine } from './light.js';
+import { sunCovered, lunarShadow } from './eclipse.js';
 
 const NAT_SKY = 1.71e-4;
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x)), lerp = (a, b, t) => a + (b - a) * t, smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
@@ -105,8 +106,20 @@ export class GroundView {
     const k = refrUniform.value, lift = a => refraction(a, k), squish = a => Math.max(0.3, Math.min(1, 1 + (lift(a + 0.1) - lift(a - 0.1)) / 0.2));
     const sv = altAzToVec(sm.sun.alt + lift(sm.sun.alt), sm.sun.az), mv = altAzToVec(sm.moon.alt + lift(sm.moon.alt), sm.moon.az);
     U.uSunDir.value.set(...sv); U.uMoonDir.value.set(...mv); U.uSunSquish.value = squish(sm.sun.alt); U.uMoonSquish.value = squish(sm.moon.alt);
-    U.uSunE.value.set(1.0, 0.985, 0.95).multiplyScalar(1.27e5);
-    U.uMoonE.value.set(1.0, 0.94, 0.86).multiplyScalar(Math.pow(10, -0.4 * (sm.moonMag + 13.99)));
+    // eclipses, from where the Sun and Moon really are (true, topocentric): no list, they just happen
+    const svT = altAzToVec(sm.sun.alt, sm.sun.az), mvT = altAzToVec(sm.moon.alt, sm.moon.az), sunKm = sm.sun.dist * 149597870.7;
+    const cover = sunCovered(svT, sunKm, mvT, sm.moonDistKm), open = 1 - cover;
+    this.sunOpen = open; this.sunCover = cover;
+    // the sky and the land are lit by what is left of the Sun; inside the umbra, by light scattered in from outside it
+    const eff = open + 3e-4 * cover;
+    U.uSunE.value.set(1.0, 0.985, 0.95).multiplyScalar(1.27e5 * eff); U.uSunDiscK.value = 1 / eff;
+    U.uMoonOcc.value = svT[0] * mvT[0] + svT[1] * mvT[1] + svT[2] * mvT[2] > Math.cos(1.5 * DEG) ? 1 : 0;
+    const oc = [-0, -(6371 + h), 0], ls = lunarShadow(svT.map(x => x * sunKm), mvT.map(x => x * sm.moonDistKm), oc);
+    this.lunar = ls && ls.depth > 1e-4 ? ls : null;
+    if (this.lunar) { U.uLunAx.value.set(...this.liftDir(ls.dir)); U.uLunR.value.set(ls.umb, ls.pen); U.uLunAvg.value.set(1, 1 - 0.7 * ls.red, 1 - 0.85 * ls.red).multiplyScalar(ls.mean); }
+    else { U.uLunR.value.set(0, 0); U.uLunAvg.value.set(1, 1, 1); }
+    const lm = this.lunar ? this.lunar.mean : 1, lr = this.lunar ? this.lunar.red : 0;
+    U.uMoonE.value.set(1.0, 0.94 * (1 - 0.5 * lr), 0.86 * (1 - 0.7 * lr)).multiplyScalar(Math.pow(10, -0.4 * (sm.moonMag + 13.99)) * lm);
     const ml = new THREE.Vector3(...sv).multiplyScalar(1.496e8).sub(new THREE.Vector3(...mv).multiplyScalar(sm.moonDistKm)).normalize();
     U.uMoonLight.value.copy(ml); U.uMoonRadius.value = Math.atan(1737.4 / sm.moonDistKm); U.uMoonLum.value = 2900;
     const pa = Math.acos(clamp(-ml.dot(new THREE.Vector3(...mv)), -1, 1)) / DEG, md = moonGain(pa), bE = Math.PI - pa * DEG;
@@ -127,7 +140,7 @@ export class GroundView {
   adaptation() {
     const sunAlt = this.sm.sun.alt, moonAlt = this.sm.moon.alt;
     let La = sunAlt > 0 ? 300 + 6000 * Math.pow(Math.sin(sunAlt * DEG), 0.8) : 300 * Math.pow(10, sunAlt * 0.33);
-    if (moonAlt > 0) La += 2.6e-3 * Math.pow(this.sm.moonFrac, 1.5) * Math.pow(Math.sin(moonAlt * DEG), 0.5);
+    if (moonAlt > 0) La += 2.6e-3 * Math.pow(this.sm.moonFrac, 1.5) * Math.pow(Math.sin(moonAlt * DEG), 0.5) * (this.lunar ? this.lunar.mean : 1);
     return La + NAT_SKY;
   }
   measureSky() {
@@ -205,7 +218,8 @@ export class GroundView {
       const edge = 0.267 + cam.fov * 0.5 * Math.hypot(1, w / h);   // disc radius + half the frame diagonal
       const sw = sv.y > -0.01 ? smooth(6, 1.5, cam.fov) * smooth(edge + 0.1, edge, ang) : 0;
       this.sunW = sw;
-      if (sw > 0) E = Math.exp(lerp(Math.log(E), Math.log(1.8 / (1.27e5 * 2.15e4 * Math.max(Tl, 1e-6))), sw));
+      // during a solar eclipse it exposes for what is left of the disc, and at totality for the corona
+      if (sw > 0) E = Math.exp(lerp(Math.log(E), Math.log(1.8 / (1.27e5 * 2.15e4 * Math.max(Tl, 1e-6) * Math.max(Math.pow(this.sunOpen ?? 1, 0.9), 4e-6))), sw));
     }
     U.uExposure.value = E;
     // rod (colourless) vision only for the wide naked-eye view: zoomed in like a telescope, bright planets show colour
@@ -229,7 +243,8 @@ export class GroundView {
     this.lut.render(); this.lutExposure = U.uExposure.value;
     r.setRenderTarget(app.post.rt); r.setClearColor(0, 1); r.clear();
     r.render(this.scene, cam);
-    if (this.model && this.model.visible) { r.clearDepth(); r.render(this.mScene, this.mCam); }
+    // the model is cut off exactly at the horizon (the ground is in front of anything below it)
+    if (this.model && this.model.visible) { r.clearDepth(); r.clippingPlanes = [this.hzPlane || (this.hzPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0))]; r.render(this.mScene, this.mCam); r.clippingPlanes = []; }
     {
       // sun star: strength follows the fraction of the (refracted) disc above the horizon, gone below it and when
       // zoomed in far (the disc itself then fills the view)
@@ -241,7 +256,7 @@ export class GroundView {
         const W = app.post.rt.width, H = app.post.rt.height, px = [(v.x * 0.5 + 0.5) * W, (v.y * 0.5 + 0.5) * H];
         if (px[0] > -W && px[0] < 2 * W && px[1] > -H && px[1] < 2 * H) {
           const ext = this.extinctionRGB(this.sm.sun.alt), Tl = 0.2126 * ext[0] + 0.7152 * ext[1] + 0.0722 * ext[2];
-          const k = frac * smooth(3, 10, cam.fov) * clamp(Tl * 15, 0, 1) * 1.1 / Math.max(Tl, 1e-4);
+          const k = frac * smooth(3, 10, cam.fov) * clamp(Tl * 15, 0, 1) * 1.1 / Math.max(Tl, 1e-4) * Math.pow(Math.max(this.sunOpen ?? 1, 0), 0.35);
           app.post.sunStar(px, [ext[0] * k, ext[1] * k, ext[2] * k], Math.min(W, H) * 0.16);
         }
       }
@@ -255,6 +270,7 @@ export class GroundView {
     let k = 0;
     for (let i = 0; i < N && k < this.MAXV; i++) {
       if (T.alt[i] < -1.5 || T.mag[i] > lim + 2) continue;
+      if (T.alt[i] < 1.5 && T.alt[i] + refraction(T.alt[i], refrUniform.value) < 0) continue;   // gone the moment it sets
       if (f && !f(i)) continue;
       if (i === app.sel && this.modelFade > 0.95) continue;
       const Lr = T.light[i * 3], Lg = T.light[i * 3 + 1], Lb = T.light[i * 3 + 2], Lv = 0.2126 * Lr + 0.7152 * Lg + 0.0722 * Lb;
@@ -371,7 +387,7 @@ export class GroundView {
     // planets, Sun, Moon labels
     g.font = '12px system-ui, sans-serif'; g.textAlign = 'left';
     const lab = (t, alt, az, c) => { if (alt < -1) return; const p = this.project(altAzToVec(alt + refraction(alt, refrUniform.value), az), w, h); if (!p || !p[2]) return; g.fillStyle = c; g.fillText(t, p[0] + 8, p[1] - 6); };
-    if (set.labels) { for (const p of this.pl) lab(p.name, p.alt, p.az, 'rgba(255,220,170,0.85)'); lab('Moon', this.sm.moon.alt, this.sm.moon.az, 'rgba(255,240,220,0.85)'); lab('Sun', this.sm.sun.alt, this.sm.sun.az, 'rgba(255,230,150,0.9)'); }
+    if (set.labels) { for (const p of this.pl) if (!(this.pdisc.info && this.pdisc.info[p.name] && this.pdisc.info[p.name].behind)) lab(p.name, p.alt, p.az, 'rgba(255,220,170,0.85)'); lab('Moon', this.sm.moon.alt, this.sm.moon.az, 'rgba(255,240,220,0.85)'); lab('Sun', this.sm.sun.alt, this.sm.sun.az, 'rgba(255,230,150,0.9)'); }
     // moons of Jupiter and Saturn, labelled when zoomed in on them
     if (set.labels && this.camera.fov < 4 && this.pdisc.moonLabels) {
       g.font = '11px system-ui, sans-serif'; g.fillStyle = 'rgba(255,225,190,0.8)';
@@ -381,7 +397,7 @@ export class GroundView {
     const lim = this.limitMag();
     if (set.shadowed) {
       g.strokeStyle = 'rgba(120,140,180,0.35)'; g.lineWidth = 1;
-      for (let i = 0; i < T.N; i++) { if (T.alt[i] < 0 || T.mag[i] < 90) continue; if (app.filter && !app.filter(i)) continue; const p = this.project(this.liftDir([T.dir[i * 3], T.dir[i * 3 + 1], T.dir[i * 3 + 2]]), w, h); if (!p || !p[2]) continue; g.beginPath(); g.arc(p[0], p[1], 2.5, 0, 6.283); g.stroke(); }
+      for (let i = 0; i < T.N; i++) { if (T.alt[i] < 1.5 && T.alt[i] + refraction(T.alt[i], refrUniform.value) < 0 || T.mag[i] < 90) continue; if (app.filter && !app.filter(i)) continue; const p = this.project(this.liftDir([T.dir[i * 3], T.dir[i * 3 + 1], T.dir[i * 3 + 2]]), w, h); if (!p || !p[2]) continue; g.beginPath(); g.arc(p[0], p[1], 2.5, 0, 6.283); g.stroke(); }
     }
     if (set.labels) {
       g.font = '11px system-ui, sans-serif';
@@ -402,7 +418,7 @@ export class GroundView {
         g.lineWidth = 1.5;
         let prev = null;
         for (const q of this.path) {
-          const p = q.alt > -1 ? this.project(this.liftDir(q.d), w, h) : null;
+          const p = q.alt + refraction(q.alt, refrUniform.value) > 0 ? this.project(this.liftDir(q.d), w, h) : null;
           if (p && prev) { g.strokeStyle = q.lit ? 'rgba(255,210,120,0.55)' : 'rgba(140,150,180,0.35)'; g.setLineDash(q.lit ? [] : [4, 4]); g.beginPath(); g.moveTo(prev[0], prev[1]); g.lineTo(p[0], p[1]); g.stroke(); }
           if (p && q.tick) { g.fillStyle = 'rgba(255,220,160,0.7)'; g.fillText(q.tick, p[0] + 5, p[1] - 4); }
           prev = p;
@@ -411,10 +427,13 @@ export class GroundView {
       }
       const p = this.project(this.liftDir([T.dir[i * 3], T.dir[i * 3 + 1], T.dir[i * 3 + 2]]), w, h);
       const rr = Math.max(14, (this.modelPx || 0) * 0.5 / (window.devicePixelRatio || 1) + 8);
+      const up = T.alt[i] + refraction(T.alt[i], refrUniform.value) > 0;
       if (p && p[2]) {
-        g.strokeStyle = 'rgba(255,200,90,0.95)'; g.lineWidth = 1.5;
+        // below the horizon: only a faint dashed ring while tracking, so you know where it will rise; no label
+        g.strokeStyle = up ? 'rgba(255,200,90,0.95)' : 'rgba(255,200,90,0.35)'; g.lineWidth = 1.5; if (!up) g.setLineDash([3, 4]);
         for (let k = 0; k < 4; k++) { g.beginPath(); g.arc(p[0], p[1], rr, k * Math.PI / 2 + 0.25, k * Math.PI / 2 + 1.32); g.stroke(); }
-        g.fillStyle = 'rgba(255,215,140,1)'; g.font = '600 12px system-ui, sans-serif'; g.fillText(T.objs[i].name, p[0] + rr + 4, p[1] - rr * 0.6);
+        g.setLineDash([]);
+        if (up) { g.fillStyle = 'rgba(255,215,140,1)'; g.font = '600 12px system-ui, sans-serif'; g.fillText(T.objs[i].name, p[0] + rr + 4, p[1] - rr * 0.6); }
       } else if (T.alt[i] > -1) {
         // arrow toward it from the screen centre
         const v = new THREE.Vector3(T.dir[i * 3], T.dir[i * 3 + 1], T.dir[i * 3 + 2]).applyMatrix4(this.camera.matrixWorldInverse);
@@ -423,7 +442,29 @@ export class GroundView {
         g.fillStyle = 'rgba(255,215,140,1)'; g.font = '600 12px system-ui, sans-serif'; g.textAlign = 'center'; g.fillText(T.objs[i].name, cx, cy + 24); g.textAlign = 'left';
       }
     }
+    this.drawCompanion(g, w, h, ms);
     ov.end();
+  }
+  // close pass from the events list: the other object gets its own cyan marker, the live separation and the time left
+  // to the closest approach, so you can watch the two cross
+  drawCompanion(g, w, h, ms) {
+    const app = this.app, T = app.tracker, c = app.companion, i = app.sel;
+    if (c == null || c < 0 || i < 0 || c === i || c >= T.N) return;
+    if (T.alt[c] + refraction(T.alt[c], refrUniform.value) <= 0) return;
+    const p = this.project(this.liftDir([T.dir[c * 3], T.dir[c * 3 + 1], T.dir[c * 3 + 2]]), w, h);
+    if (!p || !p[2]) return;
+    const lit = T.mag[c] < 90, r = 11;
+    g.strokeStyle = lit ? 'rgba(110,230,255,0.95)' : 'rgba(110,230,255,0.5)'; g.lineWidth = 1.5; if (!lit) g.setLineDash([3, 3]);
+    g.beginPath(); for (let k = 0; k < 4; k++) { const a = k * Math.PI / 2 + Math.PI / 4; g.moveTo(p[0] + Math.cos(a) * r, p[1] + Math.sin(a) * r); g.lineTo(p[0] + Math.cos(a) * (r + 7), p[1] + Math.sin(a) * (r + 7)); } g.stroke();
+    g.beginPath(); g.arc(p[0], p[1], r, 0, 6.283); g.stroke(); g.setLineDash([]);
+    const d0 = [T.dir[i * 3], T.dir[i * 3 + 1], T.dir[i * 3 + 2]], d1 = [T.dir[c * 3], T.dir[c * 3 + 1], T.dir[c * 3 + 2]];
+    const sep = Math.acos(clamp(d0[0] * d1[0] + d0[1] * d1[1] + d0[2] * d1[2], -1, 1)) / DEG;
+    const sepT = sep < 1 / 60 ? (sep * 3600).toFixed(0) + '″' : sep < 1 ? (sep * 60).toFixed(1) + '′' : sep.toFixed(2) + '°';
+    const dt = app.companionT ? (app.companionT - ms) / 1000 : null;
+    const when = dt == null ? '' : Math.abs(dt) < 0.5 ? ' · closest now' : dt > 0 ? ` · closest in ${dt < 120 ? dt.toFixed(0) + ' s' : (dt / 60).toFixed(1) + ' min'}` : ` · closest ${(-dt).toFixed(0)} s ago`;
+    g.font = '600 12px system-ui, sans-serif'; g.fillStyle = 'rgba(140,235,255,1)'; g.textAlign = 'left';
+    g.fillText(T.objs[c].name, p[0] + r + 9, p[1] + 4);
+    g.font = '11px system-ui, sans-serif'; g.fillStyle = 'rgba(140,235,255,0.85)'; g.fillText(`${sepT} from ${T.objs[i].name}${when}${lit ? '' : ' · in shadow'}`, p[0] + r + 9, p[1] + 18);
   }
   // path of the selected object across the sky: SGP4 every 15 s over -6..+14 minutes
   updatePath(ms) {

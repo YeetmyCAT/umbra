@@ -151,9 +151,13 @@ function litAll(ms) {
   for (let i = 0; i < T.N; i++) { const x = T.pos[i * 3], y = T.pos[i * 3 + 1], z = T.pos[i * 3 + 2], d = x * s[0] + y * s[1] + z * s[2]; T.litAll[i] = d > 0 || (x * x + y * y + z * z - d * d) > 6378 * 6378 ? 1 : 0; }
 }
 function planetsTEME(ms) {
-  const A = window.Astronomy, t = A.MakeTime(new Date(ms)), rot = A.Rotation_EQJ_EQD(t);
+  const A = window.Astronomy, t = A.MakeTime(new Date(ms)), rot = A.Rotation_EQJ_EQD(t), sv = A.RotateVector(rot, A.GeoVector('Sun', t, true)), sl = Math.hypot(sv.x, sv.y, sv.z);
   app.planetsTEME = ['Mercury', 'Venus', 'Mars', 'Jupiter', 'Saturn', 'Uranus', 'Neptune'].map(p => {
     const v = A.RotateVector(rot, A.GeoVector(p, t, true)), l = Math.hypot(v.x, v.y, v.z); let mag = 6; try { mag = A.Illumination(p, t).mag; } catch { }
+    // on the solar disc: a planet farther than the Sun is behind it; transits of Mercury and Venus are shown only in
+    // the Sky view, so from orbit a planet over the disc is simply not drawn
+    const cs = (v.x * sv.x + v.y * sv.y + v.z * sv.z) / (l * sl);
+    if (cs > Math.cos(0.3 * DEG)) mag = 40;
     return { v: [v.x / l, v.y / l, v.z / l], mag };
   });
   try { app.moonMag = A.Illumination('Moon', t).mag; } catch { app.moonMag = -10; }
@@ -162,20 +166,21 @@ function planetsTEME(ms) {
 // ---------- selection & info card ----------
 setTimeout(() => { app.select = select; app.setMode = setMode; app.ask = ask; });
 function select(i, center) {
-  const T = app.tracker; if (i !== app.sel) app.ground.lockT = 0; app.sel = i; T.select(i); app.ground.path = null;
+  const T = app.tracker; if (i !== app.sel) { app.ground.lockT = 0; app.companion = -1; } app.sel = i; T.select(i); app.ground.path = null;
   $('card').classList.toggle('hidden', i < 0); $('cMore').classList.add('hidden'); $('bMore').classList.remove('on');
   if (i >= 0 && app.ui.setMini && innerWidth < 640 && !app.ui.cardTouched) app.ui.setMini(true);   // phones: start compact
   app.passCache = null;
-  if (i < 0) { app.ground.lock = false; return; }
+  if (i < 0) { app.ground.lock = false; lockBtn(); return; }
   const o = T.objs[i];
   $('cName').textContent = o.name;
   $('cSub').textContent = `${TYPES[o.type]} · NORAD ${o.id}${o.cospar ? ' · ' + o.cospar : ''}`;
   if (center) { app.ground.lock = true; }
-  $('bLock').classList.toggle('on', app.ground.lock);
+  lockBtn();
   // ask CelesTrak for the newest elements of this object (allowed once per 2 h per object)
   refreshFromCelesTrak(o).then(r => { if (r.updated) { T.updateElements([o]); app.search.postMessage({ cmd: 'update', list: [{ idx: o.idx, el: o }] }); toast(`Newer orbit for ${o.name} from CelesTrak`); } });
   try { history.replaceState(null, '', '?sat=' + o.id); } catch { }
 }
+function lockBtn() { const b = $('bLock'); if (!b) return; b.classList.toggle('on', !!app.ground.lock); b.textContent = app.ground.lock ? 'Untrack' : 'Track'; }
 function sunState(d) {
   const L = d.Lc || [1, 1, 1];
   if (d.lit <= 0) return d.es > 0.003 ? "Earth's shadow (faint earthshine)" : "In Earth's shadow";
@@ -194,7 +199,7 @@ function updateCard(ms) {
     ['Range', d.range < 1e4 ? d.range.toFixed(0) + ' km' : (d.range / 1000).toFixed(1) + 'k km'], ['Height', hKm.toFixed(0) + ' km'], ['Sun', sunState(d)],
     ['Angular size', sizeAs >= 1 ? sizeAs.toFixed(1) + '″' : (sizeAs * 1000).toFixed(0) + ' mas'], ['Elements', ageTxt(o, ms)], ['Position ±', unc < 10 ? unc.toFixed(1) + ' km' : unc.toFixed(0) + ' km'],
   ].map(([k, v]) => `<div>${k}<b>${esc(v)}</b></div>`).join('');
-  $('bLock').classList.toggle('on', app.ground.lock);
+  lockBtn();
 }
 function ageTxt(o, ms) { const d = (ms - o.epoch) / 864e5; return Math.abs(d) < 1 ? (d * 24).toFixed(1) + ' h old' : d.toFixed(1) + ' d old'; }
 function details() {
@@ -232,7 +237,7 @@ async function requestPasses() {
   const ps = m.passes.filter(p => p.set > ms - 300e3);
   if (o.n < 1.5) { $('passList').innerHTML = ps.length && ps[0].risingBefore && ps[0].set >= ms + days * 864e5 - 1e3 ? 'Always above your horizon (high or geosynchronous orbit).' : ps.length ? ps.map(passRow).join('') : 'Never rises at this place.'; return; }
   $('passList').innerHTML = ps.length ? ps.map(passRow).join('') : `No passes in the next ${days} days.`;
-  $('passList').querySelectorAll('.item').forEach((el, k) => el.onclick = () => { const p = ps[k]; app.clock.set((p.visStart || p.rise) - 30e3); app.clock.setRate(1); app.ground.lock = true; setMode('sky'); });
+  $('passList').querySelectorAll('.item').forEach((el, k) => el.onclick = () => { const p = ps[k]; app.clock.set((p.visStart || p.rise) - 30e3); app.clock.setRate(1); app.ground.lock = true; lockBtn(); setMode('sky'); });
 }
 function passRow(p) {
   const vis = p.visible ? `<span class="m">${p.best < 50 ? p.best.toFixed(1) : '—'}</span>` : '<span class="m dim">not lit</span>';
@@ -267,7 +272,7 @@ async function conjSearch() {
   $('evInfo').textContent = `Searching ${o.name}'s passes in the next 24 h for objects crossing its line of sight…`; $('evList').innerHTML = '';
   const m = await ask({ cmd: 'conjunctions', idx: i, meta: metaOf(o), obs: obsMsg(), t0: ms, days: 1 });
   $('evInfo').textContent = `${m.list.length} close approaches (under 0.4°) with ${o.name} over ${m.passes} passes. "Occultation" means the two discs overlap: one passes in front of the other.`;
-  $('evList').innerHTML = m.list.map(e => { const ob = T.objs[e.idx]; return `<div class="item" data-i="${i}" data-t="${e.t}"><span class="n">${e.occult ? '⬤ Occultation: ' : ''}${esc(ob.name)}</span><span class="m">${e.sepArcsec < 120 ? e.sepArcsec.toFixed(0) + '″' : e.sepDeg.toFixed(2) + '°'}</span><span class="s">${fmtD(e.t)} ${fmtT(e.t)} · alt ${e.alt.toFixed(0)}° · ${e.front === 'other' ? esc(ob.name) + ' in front' : esc(o.name) + ' in front'} (${esc(o.name)} ${e.r0.toFixed(0)} km away, ${esc(ob.name)} ${e.r1.toFixed(0)} km) · sizes ${e.size0.toFixed(1)}″ / ${e.size1.toFixed(1)}″ · ${e.lit0 && e.lit1 ? 'both sunlit' : e.lit0 || e.lit1 ? 'one sunlit' : 'both in shadow'}</span></div>`; }).join('') || '<div class="note">None in the next 24 hours.</div>';
+  $('evList').innerHTML = m.list.map(e => { const ob = T.objs[e.idx]; return `<div class="item" data-i="${i}" data-t="${e.t}" data-c="${e.idx}"><span class="n">${esc(ob.name)} ${e.occult ? (e.front === 'other' ? 'passes in front of' : 'passes behind') : (e.front === 'other' ? 'passes just in front of' : 'passes just behind')} ${esc(o.name)}</span><span class="m">${e.sepArcsec < 120 ? e.sepArcsec.toFixed(0) + '″' : e.sepDeg.toFixed(2) + '°'}</span><span class="s">${fmtD(e.t)} ${fmtT(e.t)} · alt ${e.alt.toFixed(0)}° · ${e.occult ? 'discs overlap (occultation)' : 'close approach'} · ${esc(o.name)} ${e.r0.toFixed(0)} km away, ${esc(ob.name)} ${e.r1.toFixed(0)} km · sizes ${e.size0.toFixed(1)}″ / ${e.size1.toFixed(1)}″ · ${e.lit0 && e.lit1 ? 'both sunlit' : e.lit0 || e.lit1 ? 'one sunlit' : 'both in shadow'}</span></div>`; }).join('') || '<div class="note">None in the next 24 hours.</div>';
   bindEventItems();
 }
 async function brightPasses() {
@@ -282,7 +287,7 @@ async function brightPasses() {
   bindEventItems();
 }
 function bindEventItems() {
-  $('evList').querySelectorAll('.item').forEach(el => el.onclick = () => { const i = +el.dataset.i, t = +el.dataset.t; app.clock.set(t - 15e3); app.clock.setRate(1); select(i, true); setMode('sky'); app.ground.fov = Math.min(app.ground.fov, 60); if (innerWidth < 640) $('panel').classList.add('hidden'); });
+  $('evList').querySelectorAll('.item').forEach(el => el.onclick = () => { const i = +el.dataset.i, t = +el.dataset.t; app.clock.set(t - 15e3); app.clock.setRate(1); select(i, true); app.companion = el.dataset.c != null ? +el.dataset.c : -1; app.companionT = t; app.tracker.watch && app.tracker.watch(app.companion); setMode('sky'); app.ground.fov = Math.min(app.ground.fov, 60); if (innerWidth < 640) $('panel').classList.add('hidden'); });
 }
 
 // ---------- visible list / search ----------
@@ -345,9 +350,9 @@ function bindUI() {
   document.querySelector('.cardHead > div').onclick = () => setMini(!$('card').classList.contains('mini'));
   $('cMin').onclick = () => { app.ui.cardTouched = true; setMini(!$('card').classList.contains('mini')); };
   $('cClose').onclick = () => { select(-1); if (app.mode === 'space') setMode('sky'); try { history.replaceState(null, '', location.pathname); } catch { } };
-  $('bLock').onclick = () => { app.ground.lock = !app.ground.lock; $('bLock').classList.toggle('on', app.ground.lock); if (app.mode !== 'sky') setMode('sky'); };
+  $('bLock').onclick = () => { app.ground.lock = !app.ground.lock; lockBtn(); if (app.ground.lock && app.mode !== 'sky') setMode('sky'); };
   $('bZoom').onclick = () => { // zoom so the object fills ~40 % of the view (its true angular size)
-    const T = app.tracker, i = app.sel; if (i < 0) return; setMode('sky'); app.ground.lock = true;
+    const T = app.tracker, i = app.sel; if (i < 0) return; setMode('sky'); app.ground.lock = true; lockBtn();
     const ang = T.shape(i).size / 1000 / T.range[i] / DEG; app.ground.fov = clamp(ang / 0.35, 0.0015, 75); };
   $('bSpace').onclick = () => setMode('space');
   $('bPasses').onclick = () => { $('cMore').classList.remove('hidden'); $('bMore').classList.add('on'); details(); setTimeout(() => $('passList') && $('passList').scrollIntoView({ block: 'nearest' }), 50); };
@@ -452,7 +457,7 @@ async function toggleGyro() {
     addEventListener('deviceorientationabsolute', e => handle(e, true));
     addEventListener('deviceorientation', e => handle(e, !!e.absolute));
   }
-  G.on = true; $('gyroBtn').classList.add('on'); app.ground.lock = false;
+  G.on = true; $('gyroBtn').classList.add('on'); app.ground.lock = false; lockBtn();
   toast('Point your phone at the sky. If it is turned, set the compass correction in Settings (line it up with the Moon or a bright star).', 5000);
 }
 
@@ -472,8 +477,9 @@ function bindInput() {
     if (app.mode === 'sky') {
       const k = app.ground.fov / el.clientHeight;
       if (app.gyro.on) return;   // the phone steers; compass correction is a slider in Settings
-      app.ground.lock = false; app.ground.yaw = (drag.yaw - dx * k + 360) % 360; app.ground.pitch = clamp(drag.pitch + dy * k, -89, 89.9);
-    } else if (app.mode === 'space') { const s = app.space, k = (s.onboard ? s.fov : 160) / el.clientHeight; s.yaw = drag.yaw - dx * k * (s.onboard ? -1 : 1); s.pitch = clamp(drag.pitch + dy * k * (s.onboard ? -1 : 1), -89, 89); }
+      if (app.ground.lock && app.sel >= 0) return;   // tracking holds until Untrack is pressed (a stray drag or pinch must not drop it)
+      app.ground.yaw = (drag.yaw - dx * k + 360) % 360; app.ground.pitch = clamp(drag.pitch + dy * k, -89, 89.9);
+    } else if (app.mode === 'space') { const s = app.space, k = 160 / el.clientHeight; s.yaw = drag.yaw - dx * k; s.pitch = clamp(drag.pitch + dy * k, -89, 89); }
     else { const o = app.orbit, k = 180 / el.clientHeight; o.yaw = drag.yaw - dx * k; o.pitch = clamp(drag.pitch + dy * k, -89, 89); }
   });
   const up = e => {
@@ -486,19 +492,19 @@ function bindInput() {
   };
   el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
   el.addEventListener('wheel', e => { e.preventDefault(); setZoom(zoomVal() * Math.exp(e.deltaY * 0.0012)); }, { passive: false });
-  el.addEventListener('dblclick', () => { if (app.mode === 'space') { app.space.onboard = !app.space.onboard; toast(app.space.onboard ? 'On board: looking out from the satellite' : 'Chase camera'); } if (app.mode === 'orbit') app.orbit.follow = !app.orbit.follow; });
+  el.addEventListener('dblclick', () => { if (app.mode === 'orbit') app.orbit.follow = !app.orbit.follow; });
   addEventListener('keydown', e => {
     if (e.target.tagName === 'INPUT') return;
     if (e.key === ' ') app.clock.setRate(app.clock.rate === 0 ? 1 : 0); else if (e.key === 'l') app.clock.step(1); else if (e.key === 'j') app.clock.step(-1); else if (e.key === 'k') app.clock.toNow();
-    else if (e.key === 'Escape') select(-1); else if (e.key === 'o' && app.mode === 'space') app.space.onboard = !app.space.onboard;
+    else if (e.key === 'Escape') select(-1);
   });
 }
 const viewYaw = () => app.mode === 'sky' ? app.ground.yaw : app.mode === 'space' ? app.space.yaw : app.orbit.yaw;
 const viewPitch = () => app.mode === 'sky' ? app.ground.pitch : app.mode === 'space' ? app.space.pitch : app.orbit.pitch;
-const zoomVal = () => app.mode === 'sky' ? app.ground.fov : app.mode === 'space' ? (app.space.onboard ? app.space.fov : app.space.dist) : app.orbit.dist;
+const zoomVal = () => app.mode === 'sky' ? app.ground.fov : app.mode === 'space' ? app.space.dist : app.orbit.dist;
 function setZoom(v) {
   if (app.mode === 'sky') app.ground.fov = clamp(v, 0.0015, 120);
-  else if (app.mode === 'space') { if (app.space.onboard) app.space.fov = clamp(v, 5, 110); else app.space.dist = clamp(v, (app.space.shape?.size || 2) * 0.6, 5e5); }
+  else if (app.mode === 'space') app.space.dist = clamp(v, (app.space.shape?.size || 2) * 0.6, 5e5);
   else app.orbit.dist = clamp(v, 7500, 900000);
 }
 
