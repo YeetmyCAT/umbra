@@ -133,6 +133,24 @@ export class GroundView {
     let s = 0, n = 0;
     for (let j = Math.floor(H * 0.6); j < Math.floor(H * 0.92); j += 3) for (let i = 0; i < W; i += 8) { const k = (j * W + i) * 4, L = (0.2126 * h2f(b[k]) + 0.7152 * h2f(b[k + 1]) + 0.0722 * h2f(b[k + 2])) / E; if (L > 0) { s += Math.log(L); n++; } }
     if (n) this.skyLa = Math.exp(s / n) * 1.6;
+    this.lutW = W; this.lutH = H;
+  }
+  // sky luminance (cd/m^2) the eye is looking at: the view centre and a ring at a quarter of the field, from the LUT
+  viewSkyLum(cam) {
+    if (!this.lutBuf) return 0;
+    const b = this.lutBuf, W = this.lutW, H = this.lutH, E = this.lutExposure || this.U.uExposure.value, h2f = THREE.DataUtils.fromHalfFloat;
+    const f = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion), up = new THREE.Vector3(0, 1, 0).applyQuaternion(cam.quaternion), rt = new THREE.Vector3(1, 0, 0).applyQuaternion(cam.quaternion);
+    const a = Math.min(cam.fov, 60) * DEG * 0.25;
+    let s = 0, n = 0;
+    for (const [x, y] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const d = f.clone().addScaledVector(rt, Math.tan(a) * x).addScaledVector(up, Math.tan(a) * y).normalize();
+      if (d.y < 0.01) continue;
+      let az = Math.atan2(d.x, -d.z); if (az < 0) az += 2 * Math.PI;
+      const v = 0.5 + 0.5 * Math.sqrt(Math.asin(d.y) / (0.5 * Math.PI));
+      const i = Math.min(W - 1, Math.floor(az / (2 * Math.PI) * W)), j = Math.min(H - 1, Math.floor(v * H)), k = (j * W + i) * 4;
+      s += (0.2126 * h2f(b[k]) + 0.7152 * h2f(b[k + 1]) + 0.0722 * h2f(b[k + 2])) / E; n++;
+    }
+    return n ? s / n : 0;
   }
   // limiting magnitude (naked eye, plus binocular/telescope gain when zoomed) from the adapted sky brightness
   limitMag() { const sqm = lum2mag(Math.max(this.adaptL, 1e-5)); return 7.93 - 5 * Math.log10(Math.pow(10, 4.316 - sqm / 5) + 1) + this.U.uZoomGain.value; }
@@ -162,7 +180,13 @@ export class GroundView {
     cam.position.set(0, 0, 0); cam.updateMatrixWorld();
     // exposure: eye adaptation, from the measured sky in daylight and twilight
     let La = this.adaptation();
-    if (this.sm.sun.alt > -8) { if (!this.lutBuf || (this.frameN = (this.frameN || 0) + 1) % 15 === 0) this.measureSky(); if (this.skyLa) La = lerp(La, this.skyLa, smooth(-8, -2, this.sm.sun.alt)); }
+    if (this.sm.sun.alt > -8) {
+      if (!this.lutBuf || (this.frameN = (this.frameN || 0) + 1) % 15 === 0) this.measureSky();
+      if (this.skyLa) La = lerp(La, this.skyLa, smooth(-8, -2, this.sm.sun.alt));
+      // the eye also adapts to the bright sky it is looking at (the glare around the Sun): local adaptation
+      const Lv = this.viewSkyLum(cam);
+      if (Lv > La) La = Math.exp(lerp(Math.log(La), Math.log(Lv), 0.75));
+    }
     this.adaptL = Math.exp(lerp(Math.log(this.adaptL), Math.log(La), 1 - Math.exp(-dt * 3)));
     if (!isFinite(this.adaptL) || this.adaptL <= 0) this.adaptL = La;
     let E = 0.0922 / Math.pow(this.adaptL, 0.72) * Math.pow(2, this.ev);
@@ -195,6 +219,22 @@ export class GroundView {
     r.setRenderTarget(app.post.rt); r.setClearColor(0, 1); r.clear();
     r.render(this.scene, cam);
     if (this.model && this.model.visible) { r.clearDepth(); r.render(this.mScene, this.mCam); }
+    {
+      // sun star: strength follows the fraction of the (refracted) disc above the horizon, gone below it and when
+      // zoomed in far (the disc itself then fills the view)
+      const sd = U.uSunDir.value, hApp = Math.asin(clamp(sd.y, -1, 1)) / DEG, Rs = 0.2666 * U.uSunSquish.value, hh = clamp(hApp / Rs, -1, 1);
+      const frac = 1 - (Math.acos(hh) - hh * Math.sqrt(1 - hh * hh)) / Math.PI;
+      const v = sd.clone().applyMatrix4(cam.matrixWorldInverse);
+      if (frac > 0 && v.z < 0) {
+        v.applyMatrix4(cam.projectionMatrix);
+        const W = app.post.rt.width, H = app.post.rt.height, px = [(v.x * 0.5 + 0.5) * W, (v.y * 0.5 + 0.5) * H];
+        if (px[0] > -W && px[0] < 2 * W && px[1] > -H && px[1] < 2 * H) {
+          const ext = this.extinctionRGB(this.sm.sun.alt), Tl = 0.2126 * ext[0] + 0.7152 * ext[1] + 0.0722 * ext[2];
+          const k = frac * smooth(3, 10, cam.fov) * clamp(Tl * 15, 0, 1) * 1.1 / Math.max(Tl, 1e-4);
+          app.post.sunStar(px, [ext[0] * k, ext[1] * k, ext[2] * k], Math.min(W, H) * 0.16);
+        }
+      }
+    }
     app.post.finish();
     this.drawOverlay(ms, w, h);
   }

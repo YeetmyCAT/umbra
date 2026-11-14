@@ -148,6 +148,19 @@ export class SpaceView {
     R.render(this.oScene, skyCam);
     R.render(this.earth.scene, skyCam);
     R.clearDepth(); R.render(this.mScene, cam);
+    {
+      // the Sun seen from the camera: hidden part (Earth) and the colour of the air its light crosses on the way
+      const ck = [camKm.x, camKm.y, camKm.z], Lc = sunlight(ck, s, s.dist, [1, 1, 1]), f = Lc.f;
+      const tint = f > 1e-4 ? [Lc[0] / f, Lc[1] / f, Lc[2] / f] : [0, 0, 0];
+      U.uSunE.value.set(1.27e5 * tint[0], 1.25e5 * tint[1], 1.2e5 * tint[2]);
+      const v = sun.clone().applyMatrix4(skyCam.matrixWorldInverse);
+      if (f > 0 && v.z < 0) {
+        v.applyMatrix4(skyCam.projectionMatrix);
+        const W = app.post.rt.width, H = app.post.rt.height, Tl = 0.2126 * tint[0] + 0.7152 * tint[1] + 0.0722 * tint[2];
+        const k = f * clamp((this.fov - 3) / 7, 0, 1) * clamp(Tl * 15, 0, 1) * 0.55 / Math.max(Tl, 1e-4);
+        app.post.sunStar([(v.x * 0.5 + 0.5) * W, (v.y * 0.5 + 0.5) * H], [tint[0] * k, tint[1] * k, tint[2] * k], Math.min(W, H) * 0.16);
+      }
+    }
     app.post.finish();
     this.drawOverlay(w, h, ms, r, v, up, skyCam);
     return true;

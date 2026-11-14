@@ -35,11 +35,12 @@ export function look(ctx, r, v, o, shape, res = {}) {
   const cphi = ob[0] * ctx.s[0] + ob[1] * ctx.s[1] + ob[2] * ctx.s[2];
   res.phase = Math.acos(Math.max(-1, Math.min(1, cphi)));
   const es = earthshine(r, ctx.s); res.es = es;
+  // attitude is needed even in the Earth's shadow (the 3D model must not jump to a default orientation)
+  if (shape) res.B = bodyFrame(shape.att, r, v, ctx.s, ctx.ms, o.id, res.B);
   if (Lv <= 1e-6 && es < 1e-5) { res.mag = 99; return res; }
   const rm = Math.hypot(r[0], r[1], r[2]), down = [-r[0] / rm, -r[1] / rm, -r[2] / rm];
   if (shape && shape.facets && shape.facets.length) {
-    const B = bodyFrame(shape.att, r, v, ctx.s, ctx.ms, o.id, res.B);
-    res.B = B;
+    const B = res.B;
     const sb = [B.x[0] * ctx.s[0] + B.x[1] * ctx.s[1] + B.x[2] * ctx.s[2], B.y[0] * ctx.s[0] + B.y[1] * ctx.s[1] + B.y[2] * ctx.s[2], B.z[0] * ctx.s[0] + B.z[1] * ctx.s[1] + B.z[2] * ctx.s[2]];
     let I = facetsIntensity(shape.facets, B, ctx.s, ob) * Lv + facetsEarthshine(shape.facets, B, down, ob, sb, es);
     // shapes that are only typical of their class keep their light curve but take the observed brightness level

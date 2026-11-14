@@ -261,6 +261,10 @@ export function shapeFor(o) {
     default: parts = genericPayload(o); label = 'Generic satellite (shape not known)'; known = 'generic';
   }
   if (opsDead && att.mode !== 'tumble' && o.cls !== 'iss' && o.cls !== 'css') att = { mode: 'tumble', period: 60 + 600 * hash(o.id * 0.7) };
+  // Arrays turn to the Sun only on spacecraft known to do it (and only while they are controlled); everything else
+  // keeps its panels fixed to the body
+  const TRACKERS = ['iss', 'css', 'dockedmodule', 'hst', 'starlink', 'oneweb', 'iridiumnext', 'gps', 'galileo', 'glonass', 'beidou', 'geo', 'tianzhou'];
+  if (!TRACKERS.includes(o.cls) || att.mode === 'tumble') parts = parts.map(p => p.t === 'panel' && p.track ? { ...p, track: 0, c: p.c || p.piv } : p);
   const sh = { key, label, known, att, parts, kind, facets: facetsOf(parts), calK: Math.pow(10, -0.4 * calMag) };
   sh.size = sizeOf(parts);
   cache.set(key, sh);
