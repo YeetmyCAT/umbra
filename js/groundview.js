@@ -44,7 +44,7 @@ export class GroundView {
     this.glare = makeMoonGlare(U); S.add(this.glare);
     // ground: a flat grass field to a true 0 deg horizon, lit by the Sun, the Moon and the sky, fading into haze
     const gmat = new THREE.ShaderMaterial({
-      uniforms: U, depthWrite: false, side: THREE.BackSide,   // seen from inside the half-sphere
+      uniforms: U, depthWrite: false, side: THREE.BackSide, transparent: true, blending: THREE.NoBlending,   // inside the half-sphere; in the transparent pass so it is drawn after (and hides) the Moon, stars and satellites
       vertexShader: `out vec3 vD; void main(){ vD = position; vec4 p = projectionMatrix * viewMatrix * vec4(position + cameraPosition, 1.0); gl_Position = p.xyww; }`,
       fragmentShader: COMMON + `in vec3 vD;
         float gn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0 - 2.0*f); return mix(mix(hash12(i), hash12(i + vec2(1,0)), f.x), mix(hash12(i + vec2(0,1)), hash12(i + vec2(1,1)), f.x), f.y); }
@@ -143,16 +143,19 @@ export class GroundView {
     U.uTime.value = performance.now() / 1000;
     // where to look: gyroscope, lock on the selected satellite, or touch
     const sel = app.sel;
-    if (this.lock && sel >= 0 && !app.gyro.on && T.alt[sel] > -5) {
+    if (this.lock && sel >= 0 && !app.gyro.on) {   // keeps following it below the horizon too (you then look at the ground)
       const d = new THREE.Vector3(T.dir[sel * 3], T.dir[sel * 3 + 1], T.dir[sel * 3 + 2]);
       const yaw = Math.atan2(d.x, -d.z) / DEG, pitch = Math.asin(clamp(d.y, -1, 1)) / DEG;
       const tp = pitch + refraction(pitch, refrUniform.value);
       let dy = ((yaw - this.yaw + 540) % 360) - 180, dp = tp - this.pitch;
-      // swing over to it when first locked, then stay exactly on it at any time rate
-      if (!this.locked || Math.hypot(dy * Math.cos(tp * DEG), dp) > 2) { const k = 1 - Math.exp(-dt * 8); this.yaw = (this.yaw + dy * k + 360) % 360; this.pitch += dp * k; this.locked = Math.hypot(dy * Math.cos(tp * DEG), dp) < 0.5; }
+      // swing over to it for the first 0.6 s (real time) after locking, then stay exactly on it at any time rate
+      if (!this.lockT) this.lockT = performance.now();
+      const since = performance.now() - this.lockT;
+      if (since < 600) { const k = Math.max(1 - Math.exp(-dt * 8), since / 600); this.yaw = (this.yaw + dy * k + 360) % 360; this.pitch += dp * k; }
       else { this.yaw = (yaw + 360) % 360; this.pitch = tp; }
+      this.locked = since >= 600;
     }
-    if (!this.lock) this.locked = false;
+    if (!this.lock) { this.locked = false; this.lockT = 0; }
     cam.fov = this.fov; cam.aspect = w / h; cam.updateProjectionMatrix();
     if (app.gyro.on && app.gyro.q) { cam.quaternion.copy(app.gyro.q); const f = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion); this.yaw = (Math.atan2(f.x, -f.z) / DEG + 360) % 360; this.pitch = Math.asin(clamp(f.y, -1, 1)) / DEG; }
     else cam.rotation.set(this.pitch * DEG, -this.yaw * DEG, 0);
@@ -280,7 +283,7 @@ export class GroundView {
     v.applyMatrix4(this.camera.projectionMatrix);
     return [(v.x * 0.5 + 0.5) * w, (0.5 - v.y * 0.5) * h, Math.abs(v.x) < 1.05 && Math.abs(v.y) < 1.05];
   }
-  liftDir(d) { const alt = Math.asin(clamp(d[1], -1, 1)) / DEG; const l = refraction(alt, refrUniform.value); if (alt < -2 || l <= 0) return d; const hz = Math.hypot(d[0], d[2]) || 1, na = (alt + l) * DEG; return [d[0] / hz * Math.cos(na), Math.sin(na), d[2] / hz * Math.cos(na)]; }
+  liftDir(d) { const alt = Math.asin(clamp(d[1], -1, 1)) / DEG; const l = refraction(alt, refrUniform.value); if (l <= 0) return d; const hz = Math.hypot(d[0], d[2]) || 1, na = (alt + l) * DEG; return [d[0] / hz * Math.cos(na), Math.sin(na), d[2] / hz * Math.cos(na)]; }
   drawOverlay(ms, w, h) {
     const ov = this.overlay, g = ov.ctx, app = this.app, T = app.tracker, set = app.settings;
     ov.begin(w, h);

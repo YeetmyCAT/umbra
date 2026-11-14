@@ -410,7 +410,7 @@ export function makeMoon(U) {
           float d = max(length(q), 1.0), under = 1.0 - smoothstep(1.0, 0.96, min(r2, 1.0));
           c += vec3(1.0, 0.95, 0.88) * uMoonAvg * T * uExposure * 0.02 * exp(-(d - 1.0)*1.2)/(d*d) * uMoonCam * under;
         }
-        gl_FragColor = vec4(min(c * max(uNoAtm, smoothstep(-0.01, 0.005, uMoonDir.y)), vec3(3.0e4)), 1.0);
+        gl_FragColor = vec4(min(c * max(uNoAtm, step(-0.012, uMoonDir.y)), vec3(3.0e4)), 1.0);   // the opaque ground hides it at the horizon
       }`,
   });
   const m = new THREE.Mesh(geo, mat); m.frustumCulled = false; m.renderOrder = -80;

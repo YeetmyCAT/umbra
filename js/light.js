@@ -93,7 +93,7 @@ export const MAT = {
   mliSilver: { kd: 0.42, ks: 0.32, sig: 0.25 },
   beta: { kd: 0.72, ks: 0.04, sig: 0.6 },       // white beta cloth
   white: { kd: 0.78, ks: 0.04, sig: 0.6 },
-  alu: { kd: 0.25, ks: 0.5, sig: 0.12 },
+  alu: { kd: 0.28, ks: 0.3, sig: 0.18 },          // weathered bare aluminium
   osr: { kd: 0.05, ks: 0.85, sig: 0.012 },      // optical solar reflector (mirror) radiators
   dark: { kd: 0.06, ks: 0.04, sig: 0.25 },
   mirrorFilm: { kd: 0.03, ks: 0.4, sig: 0.12 },   // Starlink V2 mini dielectric mirror film: on a bus that isn't optically flat

@@ -14,7 +14,9 @@ export function bodyHor(body, date, obs, refr = true) {
 // Atmospheric refraction lift (degrees) at true altitude h (Saemundsson), scaled by k (pressure/temperature, 1 = standard)
 export function refraction(h, k = 1) {
   const hh = Math.max(h, -1.5), r = 1.02 / Math.tan((hh + 10.3 / (hh + 5.11)) * Math.PI / 180) / 60;
-  return Math.min(Math.max(r, 0), 0.75) * k;
+  // below the horizon the lift fades out smoothly (the same in the shaders), so nothing jumps as it sets
+  const t = Math.min(1, Math.max(0, (h + 4) / 2.5)), fade = t * t * (3 - 2 * t);
+  return Math.min(Math.max(r, 0), 0.75) * k * fade;
 }
 // k from the air at the viewer: pressure (hPa) and temperature (C)
 export function refractionK(pHpa, tC) { return (pHpa / 1010) * (283 / (273 + tC)); }
@@ -40,7 +42,8 @@ export function eqjToWorld(date, obs) {
 
 export function sunMoon(date, lat, lon, h = 0) {
   const obs = observer(lat, lon, h);
-  const sun = bodyHor('Sun', date, obs), moon = bodyHor('Moon', date, obs);
+  // true (unrefracted) altitudes: the renderer adds refraction itself, once
+  const sun = bodyHor('Sun', date, obs, false), moon = bodyHor('Moon', date, obs, false);
   const ill = A().Illumination('Moon', date);
   const phase = A().MoonPhase(date); // 0 new, 90 first quarter, 180 full
   // Bright-limb orientation: position angle from the moon toward the sun on the sky.
@@ -48,7 +51,7 @@ export function sunMoon(date, lat, lon, h = 0) {
 }
 export function planets(date, lat, lon, h = 0) {
   const obs = observer(lat, lon, h);
-  return PLANETS.map(p => { const hp = bodyHor(p, date, obs); let mag = 6; try { mag = A().Illumination(p, date).mag; } catch { } return { name: p, alt: hp.alt, az: hp.az, mag }; });
+  return PLANETS.map(p => { const hp = bodyHor(p, date, obs, false); let mag = 6; try { mag = A().Illumination(p, date).mag; } catch { } return { name: p, alt: hp.alt, az: hp.az, mag }; });
 }
 export function phaseName(deg) {
   const n = ['New Moon', 'Waxing Crescent', 'First Quarter', 'Waxing Gibbous', 'Full Moon', 'Waning Gibbous', 'Last Quarter', 'Waning Crescent'];

@@ -1,6 +1,6 @@
 {
-  "name": "Umbra Satellite Sky",
-  "short_name": "Umbra",
+  "name": "SatViewer",
+  "short_name": "SatViewer",
   "description": "Satellite planetarium: every tracked object in orbit, with real brightness, flares, glints and shapes.",
   "start_url": "./",
   "display": "standalone",

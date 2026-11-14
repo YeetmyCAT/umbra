@@ -49,8 +49,10 @@ export function makeEarth() {
       // sunlight transmittance at point p (km) toward unit l, zero in the Earth's shadow (soft edge ~ the Sun's disc)
       vec3 sunT(vec3 p, vec3 l){
         float r = length(p), mu = dot(p, l)/r, h = r - R;
-        float graze = r*sqrt(max(0.0, 1.0 - mu*mu)) - R;
-        float vis = mu > 0.0 ? 1.0 : smoothstep(-2.0, 6.0, graze);
+        // the Sun sets behind the horizon as seen from this point: fade across its disc (+-0.27 deg, plus a little
+        // for refraction) around the geometric horizon's depression, continuous everywhere (no hard terminator line)
+        float mh = -sqrt(max(0.0, 1.0 - (R/r)*(R/r)));
+        float vis = smoothstep(mh - 0.0075, mh + 0.0055, mu);
         if (vis <= 0.0) return vec3(0.0);
         float cr = chap(R/HR, max(h, 0.0)/HR, mu)*HR, cm = chap(R/HM, max(h, 0.0)/HM, mu)*HM;
         float co = cr*0.35*exp(-abs(h - 25.0)/30.0) + cr*0.1;

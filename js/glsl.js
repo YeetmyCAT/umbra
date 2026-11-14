@@ -6,7 +6,7 @@ export const refrUniform = { value: 1 };
 export const REFR = /* glsl */`
 uniform float uRefrK;
 // lift (degrees) of an object at true altitude h (Saemundsson), and the lift to remove from an apparent altitude (Bennett)
-float refrLift(float h){ float hh = max(h, -1.5); return clamp(1.02/tan(radians(hh + 10.3/(hh + 5.11)))/60.0, 0.0, 0.75)*uRefrK; }
+float refrLift(float h){ float hh = max(h, -1.5); return clamp(1.02/tan(radians(hh + 10.3/(hh + 5.11)))/60.0, 0.0, 0.75)*uRefrK*smoothstep(-4.0, -1.5, h); }
 float refrLiftApp(float h){ float hh = max(h, -1.0); return clamp(1.0/tan(radians(hh + 7.31/(hh + 4.4)))/60.0, 0.0, 0.75)*uRefrK; }
 vec3 refrSetAlt(vec3 d, float hDeg){ vec2 hz = d.xz; float l = length(hz); hz = l > 1e-6 ? hz/l : vec2(0.0, -1.0); float hr = radians(hDeg); return vec3(hz.x*cos(hr), sin(hr), hz.y*cos(hr)); }
 // true direction -> where it is seen; seen direction -> true direction (both unit vectors, world frame, y up)

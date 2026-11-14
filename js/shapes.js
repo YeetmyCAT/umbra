@@ -254,8 +254,10 @@ export function shapeFor(o) {
     case 'sar': parts = sarParts(); label = 'Radar imaging microsatellite (typical)'; known = 'class'; break;
     case 'science': parts = eoParts(o.s1 || 3, o.s2 || 2, 1); label = 'Science spacecraft (typical layout)'; known = 'class'; att = { mode: 'inertial' }; break;
     case 'sphere': parts = [sph((o.s1 || 0.6) / 2, [0, 0, 0], /LAGEOS|AJISAI|STARLETTE|LARES|STELLA/.test(o.name) ? 'alu' : 'alu')]; label = 'Sphere'; att = { mode: 'tumble', period: 60 }; break;
-    case 'rb': parts = rbParts(o); label = 'Spent rocket stage'; known = 'class'; att = { mode: 'tumble' }; kind = 'rocket body'; break;
-    case 'debris': { const d = debrisParts(o); parts = d.parts; label = 'Debris: ' + d.kind; known = 'debris'; kind = d.kind; att = { mode: 'tumble' }; break; }
+    // tumble periods: measured rocket-body light curves (e.g. MMT-9, Silha et al.) mostly show tens of seconds to a few
+    // minutes; spread evenly in log between 15 and 300 s
+    case 'rb': parts = rbParts(o); label = 'Spent rocket stage'; known = 'class'; att = { mode: 'tumble', period: 15 * Math.pow(20, hash(o.id * 1.31)) }; kind = 'rocket body'; break;
+    case 'debris': { const d = debrisParts(o); parts = d.parts; label = 'Debris: ' + d.kind; known = 'debris'; kind = d.kind; att = { mode: 'tumble', period: 3 * Math.pow(100, hash(o.id * 1.31)) }; break; }
     default: parts = genericPayload(o); label = 'Generic satellite (shape not known)'; known = 'generic';
   }
   if (opsDead && att.mode !== 'tumble' && o.cls !== 'iss' && o.cls !== 'css') att = { mode: 'tumble', period: 60 + 600 * hash(o.id * 0.7) };
@@ -283,9 +285,11 @@ function facetsOf(parts) {
       const add = (n, a, f) => F.push({ n, a: a * k, m: M(fm[f] || p.m) });
       add(X, sy * sz, 'px'); add(NX, sy * sz, 'nx'); add(Y, sx * sz, 'py'); add(NY, sx * sz, 'ny'); add(Z, sx * sy, 'pz'); add(NZ, sx * sy, 'nz');
     } else if (p.t === 'cyl' || p.t === 'cone') {
-      const a = AX[p.ax], r = p.t === 'cyl' ? p.r : (p.r1 + p.r2) / 2, l = p.l, N = 12;
+      // a smooth cylinder: 24 strips whose lobes are wide enough to merge into one continuous highlight (12 narrow
+      // strips made a rotating stage flash a dozen times per turn, which real stages don't do)
+      const a = AX[p.ax], r = p.t === 'cyl' ? p.r : (p.r1 + p.r2) / 2, l = p.l, N = 24, ms = { ...M(p.m) }; ms.sig = Math.max(ms.sig, 0.17);
       const u = p.ax === 'x' ? Y : X, v = p.ax === 'z' ? Y : Z;
-      for (let i = 0; i < N; i++) { const t = i / N * 2 * Math.PI; F.push({ n: [u[0] * Math.cos(t) + v[0] * Math.sin(t), u[1] * Math.cos(t) + v[1] * Math.sin(t), u[2] * Math.cos(t) + v[2] * Math.sin(t)], a: 2 * Math.PI * r * l / N, m: M(p.m) }); }
+      for (let i = 0; i < N; i++) { const t = i / N * 2 * Math.PI; F.push({ n: [u[0] * Math.cos(t) + v[0] * Math.sin(t), u[1] * Math.cos(t) + v[1] * Math.sin(t), u[2] * Math.cos(t) + v[2] * Math.sin(t)], a: 2 * Math.PI * r * l / N, m: ms }); }
       F.push({ n: a, a: Math.PI * r * r, m: M(p.m) }); F.push({ n: [-a[0], -a[1], -a[2]], a: Math.PI * r * r, m: M(p.m) });
     } else if (p.t === 'sphere') {
       // a sphere reflects like a diffuse sphere plus one tiny specular highlight: 14 facets approximate it

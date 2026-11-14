@@ -1,4 +1,4 @@
-// Umbra: satellite planetarium. Wires the catalogue, the tracker, the three views and the interface together.
+// SatViewer: satellite planetarium. Wires the catalogue, the tracker, the three views and the interface together.
 import * as THREE from '../vendor/three.module.min.js';
 import { loadCatalog, metaOf, refreshFromCelesTrak, uncertaintyKm, regime } from './catalog.js';
 import { Tracker } from './tracker.js';
@@ -137,7 +137,7 @@ function loop() {
   T.update(ms, app.obs, { mags: app.mode === 'sky', posOnly: app.mode !== 'sky', lazy: app.mode === 'sky', rate: app.clock.rate });
   if (app.mode === 'orbit') litAll(ms);
   if (now - lastPl > 2000) { lastPl = now; planetsTEME(ms); }
-  if (app.mode === 'sky') { if (now - lastPath > 1000 || app.clock.jumped) { lastPath = now; app.ground.updatePath(ms); } app.ground.frame(dt, ms, w, h, dpr); }
+  if (app.mode === 'sky') { if (now - lastPath > Math.min(1000, Math.max(80, 20000 / Math.max(1, Math.abs(app.clock.rate)))) || app.clock.jumped) { lastPath = now; app.ground.updatePath(ms); } app.ground.frame(dt, ms, w, h, dpr); }
   else if (app.mode === 'space') { if (!app.space.frame(dt, ms, w, h, dpr)) setMode('sky'); }
   else app.orbit.frame(dt, ms, w, h, dpr);
   app.clock.jumped = false;
@@ -162,7 +162,7 @@ function planetsTEME(ms) {
 // ---------- selection & info card ----------
 setTimeout(() => { app.select = select; app.setMode = setMode; app.ask = ask; });
 function select(i, center) {
-  const T = app.tracker; app.sel = i; T.select(i); app.ground.path = null;
+  const T = app.tracker; if (i !== app.sel) app.ground.lockT = 0; app.sel = i; T.select(i); app.ground.path = null;
   $('card').classList.toggle('hidden', i < 0); $('cMore').classList.add('hidden'); $('bMore').classList.remove('on');
   if (i >= 0 && app.ui.setMini && innerWidth < 640 && !app.ui.cardTouched) app.ui.setMini(true);   // phones: start compact
   app.passCache = null;
@@ -199,7 +199,7 @@ function updateCard(ms) {
 function ageTxt(o, ms) { const d = (ms - o.epoch) / 864e5; return Math.abs(d) < 1 ? (d * 24).toFixed(1) + ' h old' : d.toFixed(1) + ' d old'; }
 function details() {
   const i = app.sel, T = app.tracker, o = T.objs[i], sh = T.shape(i), rg = regime(o), per = 1440 / o.n;
-  const tumbleNote = sh.att.mode === 'tumble' ? `Tumbling: expect a flash or brightness swing every ~${Math.round((sh.att.period || 4 + 200 * Math.pow(((Math.sin(o.id * 1.31 * 127.1 + 311.7) * 43758.5453) % 1 + 1) % 1, 2)) / 2)} s (spin estimated; real spin rates are rarely published)` : null;
+  const tumbleNote = sh.att.mode === 'tumble' ? `Tumbling (spin estimated, ~${Math.round(sh.att.period || 0)} s per turn): slow brightness swings, usually twice per turn, with an occasional glint; real spin rates are rarely published` : null;
   const att = { lvlh: 'Earth-pointing (local vertical / local horizontal)', yawsteer: 'Earth-pointing with yaw steering (GNSS)', geo: 'Earth-pointing, arrays turn once a day', inertial: 'Inertially pointed (target unknown, estimated)', tumble: 'Tumbling (uncontrolled), spin estimated' }[sh.att.mode] || sh.att.mode;
   const rows = [
     ['Purpose', o.purpose], ['Operator', o.operator || o.owner || '—'], ['Status', o.type === 0 ? (STATUS[o.ops] || 'Unknown') : (o.type === 2 ? 'Debris' : o.type === 1 ? 'Spent stage' : 'Unknown')], ['Owner (country/org)', o.owner || '—'], ['Launched', o.launch || '—'],

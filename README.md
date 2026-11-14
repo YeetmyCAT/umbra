@@ -1,4 +1,4 @@
-# Umbra: satellite planetarium
+# SatViewer: satellite planetarium
 
 A static web app (no build step) for iPhone and desktop. It shows every tracked object in Earth orbit that has public orbital elements, with realistic brightness, and keeps the sky from SkyScout without its weather, airglow or light pollution.
 
