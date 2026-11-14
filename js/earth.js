@@ -80,11 +80,16 @@ export function makeEarth() {
         vec3 Ls = vec3(0.0), T = vec3(1.0);
         int N = int(uSteps);
         float seg = t1 - t0;
+        // where the air is densest along this ray: the tangent point for rays skimming the limb, the far end for rays
+        // that reach the ground; samples crowd there (quadratically), so the glow fades smoothly with no stepped edge
+        float tm = clamp(-dot(o, d), t0, t1); if (ground) tm = t1;
+        float hA = tm - t0, hB = t1 - tm;
         for (int i = 0; i < 24; i++) {
           if (i >= N) break;
-          float u0 = float(i)/float(N), u1 = float(i + 1)/float(N);
-          // denser steps near the near end, where the limb lives
-          float a = t0 + seg*u0*u0, b = t0 + seg*u1*u1, dt = b - a;
+          float v0 = float(i)/float(N), v1 = float(i + 1)/float(N), a, b;
+          if (ground) { a = t1 - seg*(1.0 - v0)*(1.0 - v0); b = t1 - seg*(1.0 - v1)*(1.0 - v1); }
+          else { float u0 = v0*2.0 - 1.0, u1 = v1*2.0 - 1.0; a = u0 < 0.0 ? tm - hA*u0*u0 : tm + hB*u0*u0; b = u1 < 0.0 ? tm - hA*u1*u1 : tm + hB*u1*u1; }
+          float dt = b - a;
           vec3 p = o + d*(0.5*(a + b)); float h = length(p) - R;
           float dr = exp(-h/HR), dm = exp(-h/HM), dz = max(0.0, 1.0 - abs(h - 25.0)/15.0);
           vec3 ext = bR*dr + vec3(bMe)*dm + bO*dz;

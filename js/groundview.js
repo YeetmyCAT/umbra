@@ -6,6 +6,7 @@ import { sunPrimeMeridian, makeSkyLUT, makeSkyBackground, makeStars, makePlanets
 import { refrUniform, COMMON } from './glsl.js';
 import { sunMoon, planets as planetPos, altAzToVec, eqjToWorld, observer as astroObserver, EQ2GAL, OBLIQ, refraction } from './astro.js';
 import { buildModel, poseModel, disposeModel } from './models3d.js';
+import { PlanetDiscs } from './planets.js';
 import { mulM3, DEG } from './frames.js';
 import { propagate } from './sgp.js';
 import { obsAt } from './sight.js';
@@ -22,7 +23,7 @@ function moonPhaseGain(a) {
   return { gain: real / Math.max(sa / s0, 1e-6), lsMean: sa / s0 * 0.5 };
 }
 const mgCache = new Map();
-const moonGain = a => { const k = Math.round(clamp(a, 0, 179)); if (!mgCache.has(k)) mgCache.set(k, moonPhaseGain(k)); return mgCache.get(k); };
+export const moonGain = a => { const k = Math.round(clamp(a, 0, 179)); if (!mgCache.has(k)) mgCache.set(k, moonPhaseGain(k)); return mgCache.get(k); };
 
 export class GroundView {
   constructor(app, renderer, assets) {
@@ -40,6 +41,8 @@ export class GroundView {
     this.stars = makeStars(U, assets.stars); S.add(this.stars);
     makeFaintStars(U).then(p => { this.faint = p; S.add(p); }).catch(() => { });
     this.planets = makePlanets(U); S.add(this.planets);
+    this.pdisc = new PlanetDiscs(U); S.add(this.pdisc.group);
+    this.moonPts = new THREE.Points(this.pdisc.moonPts, starMaterial(U, false)); this.moonPts.frustumCulled = false; this.moonPts.renderOrder = -88; S.add(this.moonPts);
     this.moon = makeMoon(U); S.add(this.moon);
     this.glare = makeMoonGlare(U); S.add(this.glare);
     // ground: a flat grass field to a true 0 deg horizon, lit by the Sun, the Moon and the sky, fading into haze
@@ -115,6 +118,8 @@ export class GroundView {
     const pl = planetPos(date, lat, lon, h * 1000); this.pl = pl;
     const P = this.planets.geometry.attributes.position.array, M = this.planets.geometry.attributes.mag.array;
     pl.forEach((p, i) => { P.set(altAzToVec(p.alt, p.az), i * 3); M[i] = p.mag; });
+    this.plMag = pl.map(p => p.mag);
+    try { this.pdisc.update(date, m, astroObserver(lat, lon, h * 1000), d => this.liftDir(d)); } catch (e) { console.warn(e); }
     this.planets.geometry.attributes.position.needsUpdate = true; this.planets.geometry.attributes.mag.needsUpdate = true;
     // twilight fill in the Earth's shadow (as SkyScout)
     const sa = sm.sun.alt; U.uTwAmb.value = sa < 1 && sa > -19 ? 105 * Math.pow(10, 0.354 * sa) * smooth(1, -1.5, sa) : 0;
@@ -203,11 +208,17 @@ export class GroundView {
       if (sw > 0) E = Math.exp(lerp(Math.log(E), Math.log(1.8 / (1.27e5 * 2.15e4 * Math.max(Tl, 1e-6))), sw));
     }
     U.uExposure.value = E;
-    app.post.final.mat.uniforms.uScot.value = smooth(0.004, 0.0002, this.adaptL) * 0.45 * (1 - (this.sunW || 0));
+    // rod (colourless) vision only for the wide naked-eye view: zoomed in like a telescope, bright planets show colour
+    app.post.final.mat.uniforms.uScot.value = smooth(0.004, 0.0002, this.adaptL) * 0.45 * (1 - (this.sunW || 0)) * smooth(2, 15, cam.fov);
     const pxRad = (cam.fov * DEG) / (h * dpr);
     U.uPxSr.value = pxRad * pxRad; U.uPxScale.value = dpr;
     U.uZoomGain.value = clamp(2.2 * Math.log10(75 / cam.fov), 0, 4.2);
     U.uMoonGlare.value = smooth(8, 25, cam.fov);
+    {   // planets big enough to show as discs: their point images fade out
+      const vis = this.pdisc.frame(Math.sqrt(U.uPxSr.value) || 1e-4), M = this.planets.geometry.attributes.mag.array;
+      ['Mercury', 'Venus', 'Mars', 'Jupiter', 'Saturn', 'Uranus', 'Neptune'].forEach((n, i) => { if (this.plMag) M[i] = vis[n] > 0.98 ? 40 : this.plMag[i] + (vis[n] > 0 ? -2.5 * Math.log10(Math.max(1e-4, 1 - vis[n])) : 0); });
+      this.planets.geometry.attributes.mag.needsUpdate = true;
+    }
     U.uInvProjView.value.copy(cam.projectionMatrixInverse).premultiply(cam.matrixWorld); U.uCamPos.value.copy(cam.position); U.uViewport.value.set(app.post.rt.width, app.post.rt.height);
     // deep Gaia stars only when zoomed in (they are below the naked-eye limit anyway)
     if (cam.fov < 40 && !this.gaiaLoading) { this.gaiaLoading = true; for (const f of ['data/gaia1.bin', 'data/gaia2.bin']) makeGaiaStars(U, f).then(p => { this.gaia.push(p); this.scene.add(p); }).catch(() => { }); }
@@ -361,6 +372,11 @@ export class GroundView {
     g.font = '12px system-ui, sans-serif'; g.textAlign = 'left';
     const lab = (t, alt, az, c) => { if (alt < -1) return; const p = this.project(altAzToVec(alt + refraction(alt, refrUniform.value), az), w, h); if (!p || !p[2]) return; g.fillStyle = c; g.fillText(t, p[0] + 8, p[1] - 6); };
     if (set.labels) { for (const p of this.pl) lab(p.name, p.alt, p.az, 'rgba(255,220,170,0.85)'); lab('Moon', this.sm.moon.alt, this.sm.moon.az, 'rgba(255,240,220,0.85)'); lab('Sun', this.sm.sun.alt, this.sm.sun.az, 'rgba(255,230,150,0.9)'); }
+    // moons of Jupiter and Saturn, labelled when zoomed in on them
+    if (set.labels && this.camera.fov < 4 && this.pdisc.moonLabels) {
+      g.font = '11px system-ui, sans-serif'; g.fillStyle = 'rgba(255,225,190,0.8)';
+      for (const ml of this.pdisc.moonLabels) { const p = this.project(this.liftDir(ml.dir), w, h); if (p && p[2]) g.fillText(ml.name, p[0] + 6, p[1] - 5); }
+    }
     // satellites: labels for the brightest, faint markers for objects up but in the Earth's shadow
     const lim = this.limitMag();
     if (set.shadowed) {

@@ -9,6 +9,7 @@ import { gmst, sunTEME, moonTEME, DEG } from './frames.js';
 import { propagate } from './sgp.js';
 import { sunlight, earthshine, bodyFrame, facetsIntensity, magFromI, spherePhase } from './light.js';
 import { EQ2GAL } from './astro.js';
+import { moonGain } from './groundview.js';
 
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x)), lerp = (a, b, t) => a + (b - a) * t;
 const A = () => window.Astronomy;
@@ -23,7 +24,7 @@ export class SpaceView {
       uSkyLUT: { value: blackTex() }, uSkyLUTLow: { value: blackTex() }, uExposure: { value: 1 }, uSunDir: { value: new THREE.Vector3() }, uMoonDir: { value: new THREE.Vector3() },
       uSunE: { value: new THREE.Vector3(1.27e5, 1.25e5, 1.2e5) }, uMoonE: { value: new THREE.Vector3() }, uAOD: { value: 0 }, uTime: { value: 0 }, uRefrK: { value: 0 }, uSunSquish: { value: 1 }, uMoonSquish: { value: 1 },
       uNight: { value: 0 }, uSnow: { value: 0 }, uWet: { value: 0 }, uVisKm: { value: 100 }, uOvercast: { value: 0 }, uFlash: { value: new THREE.Vector4() }, uNoAtm: { value: 1 },
-      uViewport: { value: new THREE.Vector2() }, uSunW: { value: 0 }, uSunMap: { value: sunMapTexture() }, uEqToWorld: { value: new THREE.Matrix3() }, uMW: { value: milkyWayPhoto() }, uGal: { value: new THREE.Matrix3().set(...EQ2GAL) }, uInvProjView: { value: new THREE.Matrix4() }, uCamPos: { value: new THREE.Vector3() },
+      uCamKm: { value: new THREE.Vector3() }, uViewport: { value: new THREE.Vector2() }, uSunW: { value: 0 }, uSunMap: { value: sunMapTexture() }, uEqToWorld: { value: new THREE.Matrix3() }, uMW: { value: milkyWayPhoto() }, uGal: { value: new THREE.Matrix3().set(...EQ2GAL) }, uInvProjView: { value: new THREE.Matrix4() }, uCamPos: { value: new THREE.Vector3() },
     };
     this.sky = new THREE.Scene();
     this.sky.add(this.bgMesh());
@@ -52,7 +53,7 @@ export class SpaceView {
       vertexShader: `out vec3 vDir; uniform mat4 uInvProjView; uniform vec3 uCamPos; void main(){ vec4 w = uInvProjView * vec4(position.xy, 0.5, 1.0); vDir = w.xyz/w.w - uCamPos; gl_Position = vec4(position.xy, 1.0, 1.0); }`,
       fragmentShader: `in vec3 vDir; uniform sampler2D uMW; uniform mat3 uEqToWorld, uGal; uniform vec3 uSunDir, uSunE; uniform float uExposure;
         ${SUNSPOTS}
-        uniform vec2 uViewport; uniform mat4 uInvProjView;
+        uniform vec2 uViewport; uniform mat4 uInvProjView; uniform vec3 uCamKm;
         void main(){ vec3 d = normalize(vDir);
           if (uViewport.x > 0.0) { vec4 wp = uInvProjView * vec4(gl_FragCoord.xy/uViewport*2.0 - 1.0, 0.5, 1.0); d = normalize(wp.xyz/wp.w); }
           vec3 g = uGal * (transpose(uEqToWorld) * d); float gl = atan(g.y, g.x), gb = asin(clamp(g.z, -1.0, 1.0));
@@ -60,7 +61,7 @@ export class SpaceView {
           vec3 mw = textureGrad(uMW, uv, gx, gy).rgb; mw *= mw;
           vec3 col = mw*1.3e-3*1.25*uExposure;
           float r = acos(clamp(dot(d, uSunDir), -1.0, 1.0)), R = 0.00465;
-          if (r < R) { float mu = sqrt(1.0 - (r/R)*(r/R)); vec3 sH = normalize(cross(uSunDir, abs(uSunDir.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0))), sV = cross(sH, uSunDir); vec2 uv = vec2(dot(d, sH), dot(d, sV))/R; vec3 nW = normalize(sH*uv.x + sV*uv.y - uSunDir*sqrt(max(0.0, 1.0 - dot(uv, uv)))); col += uSunE*2.15e4*(0.4 + 0.6*mu)*sunspots(transpose(uEqToWorld)*nW, mu)*uExposure; }
+          if (r < R) { float mu = sqrt(1.0 - (r/R)*(r/R)); vec3 Tsun = vec3(1.0); { float b = dot(uCamKm, d); if (b < 0.0) { float hg = length(uCamKm - d*b) - 6371.0; if (hg < 0.0) Tsun = vec3(0.0); else if (hg < 150.0) { float xr = exp(-hg/8.0)*70.8, xa = exp(-hg/1.2)*182.9; Tsun = exp(-(vec3(0.10, 0.17, 0.33)*xr + vec3(0.12, 0.13, 0.14)*xa)) / (1.0 + 6.0*exp(-hg/8.0)); } } } vec3 sH = normalize(cross(uSunDir, abs(uSunDir.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0))), sV = cross(sH, uSunDir); vec2 uv = vec2(dot(d, sH), dot(d, sV))/R; vec3 nW = normalize(sH*uv.x + sV*uv.y - uSunDir*sqrt(max(0.0, 1.0 - dot(uv, uv)))); col += uSunE*Tsun*2.15e4*(0.4 + 0.6*mu)*sunspots(transpose(uEqToWorld)*nW, mu)*uExposure; }
           // faint zodiacal-free solar corona glow in the eye/lens
           col += uSunE*uExposure*2.0e-7/(pow(r/R, 2.5) + 0.2);
           gl_FragColor = vec4(min(col, vec3(3.0e4)), 1.0); }`,
@@ -118,7 +119,11 @@ export class SpaceView {
     U.uInvProjView.value.copy(skyCam.projectionMatrixInverse).premultiply(skyCam.matrixWorld); U.uCamPos.value.set(0, 0, 0); U.uViewport.value.set(app.post.rt.width, app.post.rt.height);
     U.uMoonE.value.set(1, 0.94, 0.86).multiplyScalar(E.uMoonE.value);
     const ml = sun.clone().multiplyScalar(1.496e8).sub(new THREE.Vector3(...mp)).normalize(); U.uMoonLight.value.copy(ml);
-    U.uMoonRadius.value = Math.atan(1737.4 / moonD); U.uMoonLum.value = 2900; U.uMoonGain.value = 1; U.uMoonAvg.value = 2900 * 0.3;
+    U.uMoonRadius.value = Math.atan(1737.4 / moonD); U.uMoonLum.value = 2900;
+    {   // phase seen from here (sunlit part and earthshine), as in the ground view
+      const pa = Math.acos(clamp(-ml.dot(moonV), -1, 1)) / DEG, md = moonGain(pa), bE = Math.PI - pa * DEG;
+      U.uMoonGain.value = md.gain; U.uMoonAvg.value = 2900 * (md.gain * 2 * md.lsMean + 1.32e-4 * (Math.sin(bE) + (Math.PI - bE) * Math.cos(bE)) / Math.PI);
+    }
     if (this.app.planetsTEME) { const P = this.planets.geometry.attributes.position.array, M = this.planets.geometry.attributes.mag.array; this.app.planetsTEME.forEach((p, k) => { P.set(p.v, k * 3); M[k] = p.mag; }); this.planets.geometry.attributes.position.needsUpdate = true; this.planets.geometry.attributes.mag.needsUpdate = true; }
     // exposure: measured from the Earth in view (log average), plus the sunlit model when it fills the view
     if ((this.fn = (this.fn || 0) + 1) % 6 === 1) this.measure();
@@ -152,12 +157,21 @@ export class SpaceView {
       // the Sun seen from the camera: hidden part (Earth) and the colour of the air its light crosses on the way
       const ck = [camKm.x, camKm.y, camKm.z], Lc = sunlight(ck, s, s.dist, [1, 1, 1]), f = Lc.f;
       const tint = f > 1e-4 ? [Lc[0] / f, Lc[1] / f, Lc[2] / f] : [0, 0, 0];
-      U.uSunE.value.set(1.27e5 * tint[0], 1.25e5 * tint[1], 1.2e5 * tint[2]);
+      U.uSunE.value.set(1.27e5, 1.25e5, 1.2e5); U.uCamKm.value.copy(camKm);   // the disc is dimmed per pixel in the shader
       const v = sun.clone().applyMatrix4(skyCam.matrixWorldInverse);
       if (f > 0 && v.z < 0) {
         v.applyMatrix4(skyCam.projectionMatrix);
         const W = app.post.rt.width, H = app.post.rt.height, Tl = 0.2126 * tint[0] + 0.7152 * tint[1] + 0.0722 * tint[2];
-        const k = f * clamp((this.fov - 3) / 7, 0, 1) * clamp(Tl * 15, 0, 1) * 0.55 / Math.max(Tl, 1e-4);
+        if (!this.ray) this.ray = new THREE.Raycaster();
+        const sd = sun.clone(), e1 = new THREE.Vector3().crossVectors(sd, Math.abs(sd.z) < 0.9 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(1, 0, 0)).normalize(), e2 = new THREE.Vector3().crossVectors(sd, e1);
+        let open = 0, tot = 0;
+        for (let q = -1; q < 8; q++) {
+          const a = q * Math.PI / 4, o = q < 0 ? 0 : 0.0042, dir = sd.clone().addScaledVector(e1, Math.cos(a) * o).addScaledVector(e2, Math.sin(a) * o).normalize();
+          this.ray.set(cam.position, dir); this.ray.far = 1e5;
+          const w = q < 0 ? 2 : 1; tot += w; if (!this.ray.intersectObject(this.model, true).length) open += w;
+        }
+        const blockF = open / tot;
+        const k = f * blockF * clamp((this.fov - 3) / 7, 0, 1) * clamp(Tl * 15, 0, 1) * 0.55 / Math.max(Tl, 1e-4);
         app.post.sunStar([(v.x * 0.5 + 0.5) * W, (v.y * 0.5 + 0.5) * H], [tint[0] * k, tint[1] * k, tint[2] * k], Math.min(W, H) * 0.16);
       }
     }

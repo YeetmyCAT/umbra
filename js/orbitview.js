@@ -91,8 +91,13 @@ export class OrbitView {
     const T = this.app.tracker, v = new THREE.Vector3(); let best = -1, bd = 18;
     for (let i = 0; i < T.N; i++) {
       if (this.app.filter && !this.app.filter(i)) continue;
-      v.set(T.pos[i * 3], T.pos[i * 3 + 1], T.pos[i * 3 + 2]).project(this.cam); if (v.z > 1) continue;
-      const px = (v.x * 0.5 + 0.5) * w, py = (0.5 - v.y * 0.5) * h, d = Math.hypot(px - x, py - y); if (d < bd) { bd = d; best = i; }
+      const px = T.pos[i * 3], py = T.pos[i * 3 + 1], pz = T.pos[i * 3 + 2];
+      // hidden behind the Earth from the camera: not pickable (the dot isn't drawn either)
+      const cp = this.cam.position, dx = px - cp.x, dy = py - cp.y, dz = pz - cp.z, L = Math.hypot(dx, dy, dz);
+      const b = (cp.x * dx + cp.y * dy + cp.z * dz) / L, c = cp.lengthSq() - 6371 * 6371, disc = b * b - c;
+      if (disc > 0 && -b - Math.sqrt(disc) > 0 && -b - Math.sqrt(disc) < L) continue;
+      v.set(px, py, pz).project(this.cam); if (v.z > 1) continue;
+      const sx = (v.x * 0.5 + 0.5) * w, sy = (0.5 - v.y * 0.5) * h, d = Math.hypot(sx - x, sy - y); if (d < bd) { bd = d; best = i; }
     }
     return best;
   }

@@ -68,7 +68,7 @@ async function boot() {
   // a second worker for searches (passes, flares, transits) so positions never stall
   app.search = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
   const { elementsArray } = await import('./catalog.js');
-  app.search.postMessage({ cmd: 'init', els: elementsArray(cat.objs) });
+  app.search.postMessage({ cmd: 'init', els: elementsArray(cat.objs), meta: cat.objs.map(metaOf) });
   app.search.onmessage = onSearchMsg;
   let p = null; try { p = JSON.parse(localStorage.getItem('um_place') || 'null'); } catch { }
   setPlace(p || { lat: 51.4779, lon: -0.0015, h: 46, name: 'Greenwich' }, !!p);
@@ -221,7 +221,7 @@ let reqN = 0; const pending = new Map();
 function ask(msg) { return new Promise(res => { const req = ++reqN; pending.set(req, res); app.search.postMessage({ ...msg, req }); }); }
 function onSearchMsg(e) {
   const m = e.data;
-  if (m.cmd === 'flareProgress' || m.cmd === 'transitProgress') { $('evInfo').textContent = `Searching… ${m.done} of ${m.of}${m.found != null ? ` · ${m.found} found` : ''}`; return; }
+  if (m.cmd === 'flareProgress' || m.cmd === 'transitProgress' || m.cmd === 'conjProgress') { $('evInfo').textContent = `Searching… ${m.done} of ${m.of}${m.cmd === 'conjProgress' ? ' passes' : ''}${m.found != null ? ` · ${m.found} found` : ''}`; return; }
   const r = pending.get(m.req); if (r) { pending.delete(m.req); r(m); }
 }
 async function requestPasses() {
@@ -254,10 +254,20 @@ async function flareSearch(kind) {
 async function transitSearch() {
   const T = app.tracker, ms = app.clock.now();
   const list = T.objs.filter(o => o.cls === 'iss' || o.cls === 'css' || o.cls === 'hst' || o.idx === app.sel);
-  $('evInfo').textContent = 'Searching for Sun and Moon transits over 14 days…'; $('evList').innerHTML = '';
+  $('evInfo').textContent = 'Searching for transits of the Sun, the Moon and the planets over 14 days…'; $('evList').innerHTML = '';
   const m = await ask({ cmd: 'transits', list: list.map(o => ({ idx: o.idx, meta: metaOf(o) })), obs: obsMsg(), t0: ms, days: 14 });
   $('evInfo').textContent = `${m.list.length} transit${m.list.length === 1 ? '' : 's'} or near misses (within 0.6°) in 14 days for ${list.map(o => o.name).join(', ')}. Near misses say how far to travel for a central crossing.`;
-  $('evList').innerHTML = m.list.map(t => `<div class="item" data-i="${t.idx}" data-t="${t.t}"><span class="n">${t.body === 'Sun' ? '☀' : '☾'} ${esc(t.name)} ${t.inside ? 'crosses the ' + t.body : 'misses the ' + t.body}</span><span class="m">${t.inside ? t.dur.toFixed(2) + ' s' : t.missKm.toFixed(0) + ' km'}</span><span class="s">${fmtD(t.t)} ${fmtT(t.t)} · ${t.sizeArcsec.toFixed(0)}″ silhouette · range ${t.rangeKm.toFixed(0)} km · ${t.inside ? 'centre line ' + t.centreKm.toFixed(1) + ' km away' : 'move ~' + t.centreKm.toFixed(0) + ' km for a central crossing'}</span></div>`).join('') || '<div class="note">None in this period.</div>';
+  $('evList').innerHTML = m.list.map(t => `<div class="item" data-i="${t.idx}" data-t="${t.t}"><span class="n">${({ Sun: '☀', Moon: '☾', Mercury: '☿', Venus: '♀', Mars: '♂', Jupiter: '♃', Saturn: '♄' })[t.body] || ''} ${esc(t.name)} ${t.inside ? 'crosses ' + (t.body === 'Sun' || t.body === 'Moon' ? 'the ' : '') + t.body : 'misses ' + (t.body === 'Sun' || t.body === 'Moon' ? 'the ' : '') + t.body}</span><span class="m">${t.inside ? (t.dur > 0 ? t.dur.toFixed(2) + ' s' : 'grazes') : t.planet ? (t.sepDeg * 3600).toFixed(0) + '″' : t.missKm.toFixed(0) + ' km'}</span><span class="s">${fmtD(t.t)} ${fmtT(t.t)} · ${t.sizeArcsec.toFixed(0)}″ silhouette · range ${t.rangeKm.toFixed(0)} km · ${t.planet ? 'planet ' + (t.radDeg * 7200).toFixed(1) + '″ across, ' + (t.sepDeg * 3600).toFixed(0) + '″ apart, centre line ' + t.centreKm.toFixed(1) + ' km away' : t.inside ? 'centre line ' + t.centreKm.toFixed(1) + ' km away' : 'move ~' + t.centreKm.toFixed(0) + ' km for a central crossing'}</span></div>`).join('') || '<div class="note">None in this period.</div>';
+  bindEventItems();
+}
+async function conjSearch() {
+  const T = app.tracker, i = app.sel, ms = app.clock.now();
+  if (i < 0) { $('evInfo').textContent = 'Select a satellite first: conjunctions are searched for the selected object.'; $('evList').innerHTML = ''; return; }
+  const o = T.objs[i];
+  $('evInfo').textContent = `Searching ${o.name}'s passes in the next 24 h for objects crossing its line of sight…`; $('evList').innerHTML = '';
+  const m = await ask({ cmd: 'conjunctions', idx: i, meta: metaOf(o), obs: obsMsg(), t0: ms, days: 1 });
+  $('evInfo').textContent = `${m.list.length} close approaches (under 0.4°) with ${o.name} over ${m.passes} passes. "Occultation" means the two discs overlap: one passes in front of the other.`;
+  $('evList').innerHTML = m.list.map(e => { const ob = T.objs[e.idx]; return `<div class="item" data-i="${i}" data-t="${e.t}"><span class="n">${e.occult ? '⬤ Occultation: ' : ''}${esc(ob.name)}</span><span class="m">${e.sepArcsec < 120 ? e.sepArcsec.toFixed(0) + '″' : e.sepDeg.toFixed(2) + '°'}</span><span class="s">${fmtD(e.t)} ${fmtT(e.t)} · alt ${e.alt.toFixed(0)}° · ${e.front === 'other' ? esc(ob.name) + ' in front' : esc(o.name) + ' in front'} (${esc(o.name)} ${e.r0.toFixed(0)} km away, ${esc(ob.name)} ${e.r1.toFixed(0)} km) · sizes ${e.size0.toFixed(1)}″ / ${e.size1.toFixed(1)}″ · ${e.lit0 && e.lit1 ? 'both sunlit' : e.lit0 || e.lit1 ? 'one sunlit' : 'both in shadow'}</span></div>`; }).join('') || '<div class="note">None in the next 24 hours.</div>';
   bindEventItems();
 }
 async function brightPasses() {
@@ -342,7 +352,7 @@ function bindUI() {
   $('bSpace').onclick = () => setMode('space');
   $('bPasses').onclick = () => { $('cMore').classList.remove('hidden'); $('bMore').classList.add('on'); details(); setTimeout(() => $('passList') && $('passList').scrollIntoView({ block: 'nearest' }), 50); };
   $('bMore').onclick = () => { const h = !$('cMore').classList.contains('hidden'); $('cMore').classList.toggle('hidden', h); $('bMore').classList.toggle('on', !h); if (!h) details(); };
-  $('eFlares').onclick = () => flareSearch('all'); $('eGeo').onclick = () => flareSearch('geo'); $('eTransits').onclick = transitSearch; $('eBright').onclick = brightPasses;
+  $('eConj').onclick = conjSearch; $('eFlares').onclick = () => flareSearch('all'); $('eGeo').onclick = () => flareSearch('geo'); $('eTransits').onclick = transitSearch; $('eBright').onclick = brightPasses;
   // settings
   const S = app.settings, bindChk = (id, k) => { $(id).checked = S[k]; $(id).onchange = () => { S[k] = $(id).checked; saveSet(); }; };
   bindChk('sLines', 'lines'); bindChk('sGrid', 'grid'); bindChk('sLabels', 'labels');

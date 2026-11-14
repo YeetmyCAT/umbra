@@ -6,6 +6,7 @@ import { ommToSatrec, propagate } from './sgp.js';
 import { makeObserver, DEG } from './frames.js';
 import { obsAt, look, extinction } from './sight.js';
 import { shapeFor } from './shapes.js';
+import { sunlight as sunlightFn } from './light.js';
 
 let recs = [], meta = [];
 const st = new Float64Array(6);
@@ -32,6 +33,7 @@ onmessage = e => {
   } else if (m.cmd === 'passes') postMessage({ cmd: 'passes', idx: m.idx, req: m.req, passes: passes(m) });
   else if (m.cmd === 'flares') flares(m);
   else if (m.cmd === 'transits') transits(m);
+  else if (m.cmd === 'conjunctions') conjunctions(m);
   else if (m.cmd === 'track') postMessage({ cmd: 'track', idx: m.idx, req: m.req, pts: track(m) });
 };
 
@@ -171,7 +173,7 @@ function transits(m) {
   const sep = (a, b) => Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2])));
   m.list.forEach((c, ci) => {
     const ps = passes({ idx: c.idx, meta: c.meta, obs: m.obs, t0: m.t0, days: m.days, max: 200 });
-    for (const p of ps) for (const body of ['Sun', 'Moon']) {
+    for (const p of ps) for (const body of ['Sun', 'Moon', 'Venus', 'Jupiter', 'Mars', 'Saturn', 'Mercury']) {
       const b0 = bodyDir(body, p.tMax || p.rise);
       // body must be up
       obsAt(obs, p.tMax || p.rise, ctx);
@@ -179,17 +181,75 @@ function transits(m) {
       if (bw[0] < -0.01) continue;
       let best = null;
       for (let t = p.rise; t <= p.set; t += 2000) { const sd = satDir(c.idx, t); if (!sd) continue; const bd = bodyDir(body, t), a = sep(sd.v, bd.v); if (!best || a < best.a) best = { t, a }; }
-      if (!best || best.a > 3 * DEG) continue;
+      const planet = body !== 'Sun' && body !== 'Moon';
+      if (!best || best.a > (planet ? 1.5 : 3) * DEG) continue;
       for (let t = best.t - 2500; t <= best.t + 2500; t += 25) { const sd = satDir(c.idx, t); if (!sd) continue; const bd = bodyDir(body, t), a = sep(sd.v, bd.v); if (a < best.a) best = { t, a, r: sd.r, bd }; }
       if (!best.bd) continue;
-      const rad = Math.asin((body === 'Sun' ? 696000 : 1737.4) / best.bd.dist);
-      if (best.a > rad + 0.6 * DEG) continue;
+      const rad = Math.asin(({ Sun: 696000, Moon: 1737.4, Mercury: 2439.7, Venus: 6051.8, Mars: 3396.2, Jupiter: 71492, Saturn: 60268 })[body] / best.bd.dist);
+      if (best.a > rad + (planet ? 0.05 : 0.6) * DEG) continue;
+      const satRad = shapeFor(c.meta).size / 2000 / best.r;   // the satellite's own angular radius: the discs touch at rad + satRad
       // time spent inside the disc
       let dur = 0; if (best.a < rad) { let a0 = best.t, a1 = best.t; while (a0 > best.t - 20000) { const sd = satDir(c.idx, a0 - 10); if (!sd || sep(sd.v, bodyDir(body, a0 - 10).v) > rad) break; a0 -= 10; } while (a1 < best.t + 20000) { const sd = satDir(c.idx, a1 + 10); if (!sd || sep(sd.v, bodyDir(body, a1 + 10).v) > rad) break; a1 += 10; } dur = (a1 - a0) / 1000; }
-      out.push({ idx: c.idx, id: c.meta.id, name: c.meta.name, body, t: best.t, sepDeg: best.a / DEG, radDeg: rad / DEG, inside: best.a < rad, dur, rangeKm: best.r, missKm: Math.max(0, best.a - rad) * best.r, centreKm: best.a * best.r, sizeArcsec: (shapeFor(c.meta).size / 1000 / best.r) / DEG * 3600 });
+      out.push({ idx: c.idx, id: c.meta.id, name: c.meta.name, body, t: best.t, sepDeg: best.a / DEG, radDeg: rad / DEG, inside: best.a < rad + satRad, planet, dur, rangeKm: best.r, missKm: Math.max(0, best.a - rad) * best.r, centreKm: best.a * best.r, sizeArcsec: (shapeFor(c.meta).size / 1000 / best.r) / DEG * 3600 });
     }
     postMessage({ cmd: 'transitProgress', req: m.req, done: ci + 1, of: m.list.length });
   });
   out.sort((a, b) => a.t - b.t);
   postMessage({ cmd: 'transits', req: m.req, list: out });
 }
+
+// Satellite-satellite conjunctions: moments when another object passes (very nearly) in front of or behind the
+// selected one as seen from the observer. Coarse pass over the whole catalogue finds objects anywhere near the line
+// of sight, then candidates are followed at 2 s and refined at 0.05 s.
+function conjunctions(m) {
+  const i0 = m.idx, o0 = m.meta, obs = makeObserver(m.obs.lat, m.obs.lon, m.obs.h), ctx = {}, N = recs.length, out = [];
+  const ps = passes({ idx: i0, meta: o0, obs: m.obs, t0: m.t0, days: m.days, max: 30 }).filter(p => p.maxAlt > 8);
+  const dirAt = (i, t, outv) => { if (!propagate(recs[i], t, st)) return -1; if (ctx.ms !== t) obsAt(obs, t, ctx); const dx = st[0] - ctx.o[0], dy = st[1] - ctx.o[1], dz = st[2] - ctx.o[2], r = Math.hypot(dx, dy, dz); outv[0] = dx / r; outv[1] = dy / r; outv[2] = dz / r; outv.r = r; outv.lit = outv.wantLit ? sunlightF([st[0], st[1], st[2]], ctx) : 1; return r; };
+  const u0 = [0, 0, 0], u1 = [0, 0, 0];
+  ps.forEach((p, pi) => {
+    const a = Math.max(p.rise, m.t0), b = p.set; if (b <= a) return;
+    // 1) coarse: every object, every 30 s; keep those within 25 deg of the selected object's direction at any step
+    const cand = new Set();
+    for (let t = a; t <= b; t += 30e3) {
+      if (dirAt(i0, t, u0) < 0) continue;
+      for (let i = 0; i < N; i++) { if (i === i0 || !recs[i]) continue; if (dirAt(i, t, u1) < 0) continue; if (u0[0] * u1[0] + u0[1] * u1[1] + u0[2] * u1[2] > 0.906) cand.add(i); }
+    }
+    // 2) fine: candidates every 2 s, closest approach between steps from the change in relative direction
+    for (const i of cand) {
+      let prev = null;
+      for (let t = a; t <= b; t += 2e3) {
+        if (dirAt(i0, t, u0) < 0 || dirAt(i, t, u1) < 0) { prev = null; continue; }
+        const rel = [u1[0] - u0[0], u1[1] - u0[1], u1[2] - u0[2]];
+        if (prev) {
+          const d = [rel[0] - prev[0], rel[1] - prev[1], rel[2] - prev[2]], dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+          const f = dd > 0 ? Math.max(0, Math.min(1, -(prev[0] * d[0] + prev[1] * d[1] + prev[2] * d[2]) / dd)) : 0;
+          const mx = prev[0] + d[0] * f, my = prev[1] + d[1] * f, mz = prev[2] + d[2] * f, sep = Math.hypot(mx, my, mz);
+          if (sep < 0.4 * DEG) {
+            // 3) refine around the interpolated minimum
+            let best = null; u0.wantLit = u1.wantLit = true;
+            for (let tt = t - 2e3 + f * 2e3 - 1500; tt <= t - 2e3 + f * 2e3 + 1500; tt += 50) {
+              if (dirAt(i0, tt, u0) < 0) continue; const r0 = u0.r, l0 = u0.lit; if (dirAt(i, tt, u1) < 0) continue;
+              const ss = Math.acos(Math.max(-1, Math.min(1, u0[0] * u1[0] + u0[1] * u1[1] + u0[2] * u1[2])));
+              if (!best || ss < best.sep) best = { t: tt, sep: ss, r0, r1: u1.r, lit0: l0, lit1: u1.lit, alt: Math.asin(Math.max(-1, Math.min(1, ctx.M[3] * u0[0] + ctx.M[4] * u0[1] + ctx.M[5] * u0[2]))) / DEG };
+            }
+            if (best && best.alt > 3) {
+              const s0 = shapeFor(o0).size, s1 = shapeFor(meta[i] || { id: i, cls: 'debris', type: 2, rcs: 0.1 }).size;
+              const ang0 = s0 / 2000 / best.r0, ang1 = s1 / 2000 / best.r1;
+              u0.wantLit = u1.wantLit = false;
+              out.push({ t: best.t, idx: i, sepDeg: best.sep / DEG, sepArcsec: best.sep / DEG * 3600, front: best.r1 < best.r0 ? 'other' : 'selected', occult: best.sep < ang0 + ang1, r0: best.r0, r1: best.r1, lit0: best.lit0 > 0.02, lit1: best.lit1 > 0.02, alt: best.alt, size0: ang0 * 2 / DEG * 3600, size1: ang1 * 2 / DEG * 3600 });
+            }
+          }
+        }
+        prev = rel;
+      }
+    }
+    postMessage({ cmd: 'conjProgress', req: m.req, done: pi + 1, of: ps.length, found: out.length });
+  });
+  // one entry per object per pass (the closest)
+  out.sort((x, y) => x.sepDeg - y.sepDeg);
+  const seen = new Set(), list = [];
+  for (const e of out) { const k = e.idx + ':' + Math.round(e.t / 600e3); if (seen.has(k)) continue; seen.add(k); list.push(e); if (list.length >= 60) break; }
+  list.sort((x, y) => x.t - y.t);
+  postMessage({ cmd: 'conjunctions', req: m.req, list, passes: ps.length });
+}
+function sunlightF(r, ctx) { const L = [1, 1, 1]; sunlightFn(r, ctx.s, ctx.sd, L); return L.f; }
