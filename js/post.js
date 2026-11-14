@@ -32,7 +32,7 @@ export class Post {
   }
   // Sun star: diffraction spikes from the eye's/camera's aperture, drawn additively around the Sun's screen position.
   // pos: pixel position in the render target; col: RGB strength (0 = off); len: spike length (px)
-  sunStar(pos, col, len, flare = 1) {
+  sunStar(pos, col, len, flare = 0) {   // lens flare off by default (the user found it distracting)
     if (!this.star) {
       const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
       const mat = new THREE.ShaderMaterial({
