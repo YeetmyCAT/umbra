@@ -66,14 +66,10 @@ export class Post {
               float aa[NG] = float[NG](0.07, 0.12, 0.035, 0.07, 0.025, 0.05, 0.018);
               for (int i = 0; i < NG; i++) {
                 vec2 q = gl_FragCoord.xy - (uC + axis*kk[i]); float R = rr[i]*S;
-                // hexagonal aperture blades: distance to a regular hexagon
-                vec2 a = abs(q); float hx = max(a.x*0.866 + a.y*0.5, a.y);
+                float hx = length(q);   // round ghosts
                 float disc = smoothstep(R, R*0.88, hx), rim = smoothstep(R*0.8, R*0.97, hx)*disc;
                 c += tc[i]*uCol*aa[i]*(disc*0.6 + rim*0.8)*uFlare;
               }
-              // faint halo ring centred on the Sun
-              float ring = exp(-pow((r - S*1.15)/(S*0.05), 2.0));
-              c += vec3(0.7, 0.85, 1.0)*uCol*0.02*ring*uFlare;
             }
             gl_FragColor = vec4(min(c, vec3(60.0)), 1.0);
           }`,
