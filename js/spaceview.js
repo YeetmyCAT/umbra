@@ -4,7 +4,7 @@
 import * as THREE from '../vendor/three.module.min.js';
 import { makeEarth } from './earth.js';
 import { makeStars, makeMoon, makePlanets, milkyWayPhoto, makeFaintStars, starMaterial, SUNSPOTS, sunMapTexture, sunPrimeMeridian, eclipseUniforms } from './sky.js';
-import { SOLAR_GLSL, sunMoonTEME, sunCovered, lunarShadow, setEarthEclipse } from './eclipse.js';
+import { SOLAR_GLSL, sunMoonTEME, sunCovered, lunarShadow, setEarthEclipse, litCentroid, starEclipse } from './eclipse.js';
 import { buildModel, poseModel, disposeModel } from './models3d.js';
 import { gmst, sunTEME, moonTEME, DEG } from './frames.js';
 import { propagate } from './sgp.js';
@@ -127,6 +127,8 @@ export class SpaceView {
     const sRel = rel(smp.sun), sRelD = Math.hypot(...sRel), sDirSat = [sRel[0] / sRelD, sRel[1] / sRelD, sRel[2] / sRelD];
     const cover = sunCovered(sDirSat, sRelD, [moonV.x, moonV.y, moonV.z], moonD), open1 = 1 - cover;
     U.uMoonOcc.value = dot3(moonV, sun) > Math.cos(2 * DEG) ? 1 : 0; this.sunOpen = open1;
+    this.sunLitOff = null;   // the glare comes from the crescent that is left
+    if (cover > 1e-5 && open1 > 0) { const c = litCentroid(sDirSat, Math.asin(696000 / sRelD), [moonV.x, moonV.y, moonV.z], Math.asin(1737.4 / moonD)); this.sunLitOff = [c[0] - sDirSat[0], c[1] - sDirSat[1], c[2] - sDirSat[2]]; }
     U.uMoonCap.value = 1.3;   // like the eye: bright but not blown out into a glowing ball
     // sky uniforms
     const eq = this.eqToTeme(ms); U.uEqToWorld.value.set(...eq); U.uSunW.value = sunPrimeMeridian(ms);
@@ -145,7 +147,8 @@ export class SpaceView {
     const L = sunlight(r, s, s.dist, [1, 1, 1]), Lv = 0.2126 * L[0] + 0.7152 * L[1] + 0.0722 * L[2];
     let La = Math.max(this.earthLa || 1e-3, 2e-4);
     La = Math.max(La, Lv * 1.27e5 * 0.6 / Math.PI * 0.35 * clamp(this.shape.size / this.dist, 0.15, 1));
-    if (dot3(sun, skyDir(skyCam)) > Math.cos(cam.fov * DEG * 0.6)) La = Math.max(La, 3000 * Math.max(open1, 2e-4));   // eclipsed Sun: exposure opens for the corona
+    // (only when the Sun is really there: not when it is behind the Earth, which is straight down in the night view)
+    if (Lv > 0 && dot3(sun, skyDir(skyCam)) > Math.cos(cam.fov * DEG * 0.6)) La = Math.max(La, 3000 * Lv * Math.max(open1, 2e-4));   // eclipsed Sun: exposure opens for the corona
     this.adapt = Math.exp(lerp(Math.log(this.adapt), Math.log(La), 1 - Math.exp(-dt * 2.5)));
     // camera-like exposure (photographs from orbit): mid-tones of what is lit map to ~0.8
     let Ex = 0.8 / this.adapt * Math.pow(2, app.ev);
@@ -173,8 +176,10 @@ export class SpaceView {
       const ck = [camKm.x, camKm.y, camKm.z], Lc = sunlight(ck, s, s.dist, [1, 1, 1]), f = Lc.f;
       const tint = f > 1e-4 ? [Lc[0] / f, Lc[1] / f, Lc[2] / f] : [0, 0, 0];
       U.uSunE.value.set(1.27e5, 1.25e5, 1.2e5); U.uCamKm.value.copy(camKm);   // the disc is dimmed per pixel in the shader
-      const v = sun.clone().applyMatrix4(skyCam.matrixWorldInverse);
-      if (f > 0 && v.z < 0) {
+      const v = sun.clone(); if (this.sunLitOff) v.add(new THREE.Vector3(...this.sunLitOff)).normalize();
+      v.applyMatrix4(skyCam.matrixWorldInverse);
+      const se = starEclipse(open1, cam.fov);
+      if (f > 0 && v.z < 0 && se.k > 0) {
         v.applyMatrix4(skyCam.projectionMatrix);
         const W = app.post.rt.width, H = app.post.rt.height, Tl = 0.2126 * tint[0] + 0.7152 * tint[1] + 0.0722 * tint[2];
         if (!this.ray) this.ray = new THREE.Raycaster();
@@ -185,9 +190,9 @@ export class SpaceView {
           this.ray.set(cam.position, dir); this.ray.far = 1e5;
           const w = q < 0 ? 2 : 1; tot += w; if (!this.ray.intersectObject(this.model, true).length) open += w;
         }
-        const blockF = open / tot * open1;
+        const blockF = open / tot * se.k;
         const k = f * blockF * clamp((this.fov - 3) / 7, 0, 1) * clamp(Tl * 15, 0, 1) * 0.55 / Math.max(Tl, 1e-4);
-        app.post.sunStar([(v.x * 0.5 + 0.5) * W, (v.y * 0.5 + 0.5) * H], [tint[0] * k, tint[1] * k, tint[2] * k], Math.min(W, H) * 0.16, 0, 1);
+        app.post.sunStar([(v.x * 0.5 + 0.5) * W, (v.y * 0.5 + 0.5) * H], [tint[0] * k, tint[1] * k, tint[2] * k], Math.min(W, H) * 0.16 * se.s, 0, 1);
       }
     }
     app.post.finish();

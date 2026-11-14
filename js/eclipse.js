@@ -36,6 +36,33 @@ export function discOverlap(r1, r2, d) {
   return (r1 * r1 * a1 + r2 * r2 * a2 - 0.5 * k) / (Math.PI * r1 * r1);
 }
 
+// Where the light of a partly covered Sun comes from: the brightness-weighted centroid of the uncovered part of its
+// disc (limb darkened), as a unit direction. sunDir/moonDir unit vectors, rs/rm angular radii (rad). The eye's glare
+// (sun star) sits there, on the crescent, not on the Moon in the middle.
+export function litCentroid(sunDir, rs, moonDir, rm) {
+  const e1 = nrm(Math.abs(sunDir[2]) < 0.9 ? [sunDir[1], -sunDir[0], 0] : [0, sunDir[2], -sunDir[1]]);
+  const e2 = [sunDir[1] * e1[2] - sunDir[2] * e1[1], sunDir[2] * e1[0] - sunDir[0] * e1[2], sunDir[0] * e1[1] - sunDir[1] * e1[0]];
+  const mx = dot(moonDir, e1) / rs, my = dot(moonDir, e2) / rs, q = rm / rs, q2 = q * q;
+  let sx = 0, sy = 0, sw = 0;
+  const N = 28;
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    const x = (i + 0.5) / N * 2 - 1, y = (j + 0.5) / N * 2 - 1, r2 = x * x + y * y;
+    if (r2 > 1 || (x - mx) * (x - mx) + (y - my) * (y - my) < q2) continue;
+    const w = 0.4 + 0.6 * Math.sqrt(1 - r2); sx += x * w; sy += y * w; sw += w;
+  }
+  if (!sw) return sunDir;
+  const cx = sx / sw * rs, cy = sy / sw * rs;
+  return nrm([sunDir[0] + e1[0] * cx + e2[0] * cy, sunDir[1] + e1[1] * cx + e2[1] * cy, sunDir[2] + e1[2] * cx + e2[2] * cy]);
+}
+// Sun star during a solar eclipse: it fades AND shrinks as the Sun is covered (open = uncovered fraction), and is gone
+// well before totality when zoomed in (a magnified crescent no longer dazzles). Returns strength and size factors.
+export function starEclipse(open, fov) {
+  if (open >= 0.99999) return { k: 1, s: 1 };
+  const o = Math.max(open, 0), z = Math.max(0, Math.min(1, (30 - fov) / 25));
+  const thr = 0.004 + 0.06 * z, t = Math.max(0, Math.min(1, o / thr)), gone = t * t * (3 - 2 * t);
+  return { k: Math.pow(o, 0.5) * gone, s: Math.max(0.04, Math.pow(o, 0.4)) };
+}
+
 // Earth's shadow on the Moon seen from an observer at the origin. sun, moon, earthC: positions (km) relative to the
 // observer, any common frame. Returns the shadow axis direction at the Moon's distance and the angular radii of the
 // umbra and penumbra (the atmosphere widens the shadow ~2 %), plus the Moon's mean brightness factor and colour.

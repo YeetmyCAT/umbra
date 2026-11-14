@@ -426,6 +426,9 @@ export function makeMoon(U) {
         // the eye's wide dynamic range: the disc is only slightly overexposed (sunlit surface just past white,
         // maria still visible); a camera exposing for the night sky blows it out
         float peak = mix(uMoonAvg*ks*ks, uMoonLum*uMoonGain, w) * dot(T, vec3(0.2126, 0.7152, 0.0722)) * uExposure;
+        // in a lunar eclipse the eye adapts to the dimmed disc: deep in the umbra the copper-red Moon stands out clearly
+        // (instead of being squashed as if it were still a full Moon); a sunlit sliver left at the edge stays blown out
+        peak *= clamp(uLunAvg.r*1.6, 1.0e-6, 1.0);
         c *= mix(min(1.0, uMoonCap/max(peak, 1e-6)), 1.0, uMoonCam);
         // camera: glare from lens and sensor around the overexposed Moon, scaled by its total light
         if (uMoonCam > 0.0) {
@@ -444,19 +447,21 @@ export function makeMoon(U) {
 // Stiles-Holladay disability-glare law, L = 10 E / theta^2 (cd/m^2, E in lux at the eye, theta in degrees), so even a
 // crescent lifts the whole sky a little and a full Moon a lot. Camera: lens and sensor flare, stronger and wider.
 export function makeMoonGlare(U) {
-  Object.assign(U, { uMoonVis: { value: 1 }, uMoonGlare: { value: 1 } });
+  // uLunGlow: colour and extra strength of the glare during a lunar eclipse (red like the Moon, and weaker relative to
+  // the disc the deeper the eclipse, so the disc itself stands out at totality)
+  Object.assign(U, { uMoonVis: { value: 1 }, uMoonGlare: { value: 1 }, uLunGlow: { value: new THREE.Vector3(1, 0.96, 0.9) } });
   const mat = new THREE.ShaderMaterial({
     uniforms: U, transparent: true, depthTest: false, depthWrite: false, blending: THREE.AdditiveBlending,
     vertexShader: `out vec3 vDir; uniform mat4 uInvProjView; uniform vec3 uCamPos;
       void main(){ vec4 w = uInvProjView * vec4(position.xy, 0.5, 1.0); vDir = w.xyz/w.w - uCamPos; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
     fragmentShader: COMMON + /* glsl */`
-      in vec3 vDir; uniform float uMoonCam, uMoonVis, uMoonGlare, uMoonRadius;
+      in vec3 vDir; uniform float uMoonCam, uMoonVis, uMoonGlare, uMoonRadius; uniform vec3 uLunGlow;
       void main(){
         vec3 d = normalize(vDir), m = normalize(uMoonDir);
         float th = max(acos(clamp(dot(d, m), -1.0, 1.0)), uMoonRadius*1.3) * 57.29578;   // degrees from the Moon
         float E = dot(uMoonE * directT(max(m.y, 0.0)), vec3(0.2126, 0.7152, 0.0722)) * smoothstep(-0.01, 0.01, m.y) * uMoonVis;
         float L = mix(10.0*E/(th*th), 60.0*E/pow(th, 1.6), uMoonCam) * uMoonGlare;
-        gl_FragColor = vec4(vec3(1.0, 0.96, 0.9) * min(L*uExposure, 3.0e4), 1.0);
+        gl_FragColor = vec4(uLunGlow * min(L*uExposure, 3.0e4), 1.0);
       }`,
   });
   const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));

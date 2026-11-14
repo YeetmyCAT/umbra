@@ -11,7 +11,7 @@ import { mulM3, DEG } from './frames.js';
 import { propagate } from './sgp.js';
 import { obsAt } from './sight.js';
 import { earthshine } from './light.js';
-import { sunCovered, lunarShadow } from './eclipse.js';
+import { sunCovered, lunarShadow, litCentroid, starEclipse } from './eclipse.js';
 
 const NAT_SKY = 1.71e-4;
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x)), lerp = (a, b, t) => a + (b - a) * t, smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
@@ -110,6 +110,12 @@ export class GroundView {
     const svT = altAzToVec(sm.sun.alt, sm.sun.az), mvT = altAzToVec(sm.moon.alt, sm.moon.az), sunKm = sm.sun.dist * 149597870.7;
     const cover = sunCovered(svT, sunKm, mvT, sm.moonDistKm), open = 1 - cover;
     this.sunOpen = open; this.sunCover = cover;
+    // the glare comes from the crescent that is left, not from the centre of the disc (behind the Moon)
+    this.sunLitOff = null;
+    if (cover > 1e-5 && open > 0) {
+      const c = litCentroid(svT, Math.asin(696000 / sunKm), mvT, Math.asin(1737.4 / sm.moonDistKm));
+      this.sunLitOff = [c[0] - svT[0], c[1] - svT[1], c[2] - svT[2]];
+    }
     // the sky and the land are lit by what is left of the Sun; inside the umbra, by light scattered in from outside it
     const eff = open + 3e-4 * cover;
     U.uSunE.value.set(1.0, 0.985, 0.95).multiplyScalar(1.27e5 * eff); U.uSunDiscK.value = 1 / eff;
@@ -120,6 +126,12 @@ export class GroundView {
     else { U.uLunR.value.set(0, 0); U.uLunAvg.value.set(1, 1, 1); }
     const lm = this.lunar ? this.lunar.mean : 1, lr = this.lunar ? this.lunar.red : 0;
     U.uMoonE.value.set(1.0, 0.94 * (1 - 0.5 * lr), 0.86 * (1 - 0.7 * lr)).multiplyScalar(Math.pow(10, -0.4 * (sm.moonMag + 13.99)) * lm);
+    {   // the glare takes the eclipsed Moon's colour and weakens faster than the disc as it goes deeper into the umbra
+      const rd = this.lunar ? Math.max(lr, smooth(0.35, 0.03, lm)) : 0;
+      const g = [1, 0.96 - 0.56 * rd, 0.9 - 0.72 * rd], gl = 0.2126 * g[0] + 0.7152 * g[1] + 0.0722 * g[2];
+      const kk = Math.pow(Math.max(lm, 1e-4), 0.8) / gl;
+      U.uLunGlow.value.set(g[0] * kk, g[1] * kk, g[2] * kk);
+    }
     const ml = new THREE.Vector3(...sv).multiplyScalar(1.496e8).sub(new THREE.Vector3(...mv).multiplyScalar(sm.moonDistKm)).normalize();
     U.uMoonLight.value.copy(ml); U.uMoonRadius.value = Math.atan(1737.4 / sm.moonDistKm); U.uMoonLum.value = 2900;
     const pa = Math.acos(clamp(-ml.dot(new THREE.Vector3(...mv)), -1, 1)) / DEG, md = moonGain(pa), bE = Math.PI - pa * DEG;
@@ -250,14 +262,16 @@ export class GroundView {
       // zoomed in far (the disc itself then fills the view)
       const sd = U.uSunDir.value, hApp = Math.asin(clamp(sd.y, -1, 1)) / DEG, Rs = 0.2666 * U.uSunSquish.value, hh = clamp(hApp / Rs, -1, 1);
       const frac = 1 - (Math.acos(hh) - hh * Math.sqrt(1 - hh * hh)) / Math.PI;
-      const v = sd.clone().applyMatrix4(cam.matrixWorldInverse);
-      if (frac > 0 && v.z < 0) {
+      const v = sd.clone(); if (this.sunLitOff) v.add(new THREE.Vector3(...this.sunLitOff)).normalize();
+      v.applyMatrix4(cam.matrixWorldInverse);
+      const se = starEclipse(this.sunOpen ?? 1, cam.fov);
+      if (frac > 0 && v.z < 0 && se.k > 0) {
         v.applyMatrix4(cam.projectionMatrix);
         const W = app.post.rt.width, H = app.post.rt.height, px = [(v.x * 0.5 + 0.5) * W, (v.y * 0.5 + 0.5) * H];
         if (px[0] > -W && px[0] < 2 * W && px[1] > -H && px[1] < 2 * H) {
           const ext = this.extinctionRGB(this.sm.sun.alt), Tl = 0.2126 * ext[0] + 0.7152 * ext[1] + 0.0722 * ext[2];
-          const k = frac * smooth(3, 10, cam.fov) * clamp(Tl * 15, 0, 1) * 1.1 / Math.max(Tl, 1e-4) * Math.pow(Math.max(this.sunOpen ?? 1, 0), 0.35);
-          app.post.sunStar(px, [ext[0] * k, ext[1] * k, ext[2] * k], Math.min(W, H) * 0.16);
+          const k = frac * smooth(3, 10, cam.fov) * clamp(Tl * 15, 0, 1) * 1.1 / Math.max(Tl, 1e-4) * se.k;
+          app.post.sunStar(px, [ext[0] * k, ext[1] * k, ext[2] * k], Math.min(W, H) * 0.16 * se.s);
         }
       }
     }
