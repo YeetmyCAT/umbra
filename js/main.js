@@ -508,5 +508,11 @@ function setZoom(v) {
   else app.orbit.dist = clamp(v, 7500, 900000);
 }
 
-if ('serviceWorker' in navigator && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') navigator.serviceWorker.register('sw.js').catch(() => { });
+if ('serviceWorker' in navigator && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+  // a new version takes over: reload once so the page runs it (files are cached first for offline use, so without this
+  // an update only showed after a second reload)
+  const hadSW = !!navigator.serviceWorker.controller; let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadSW && !reloaded) { reloaded = true; location.reload(); } });
+  navigator.serviceWorker.register('sw.js').then(r => r.update()).catch(() => { });
+}
 boot().catch(e => { console.error(e); progress('Could not start: ' + e.message); });

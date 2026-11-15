@@ -17,24 +17,25 @@ export const PLANET_DATA = {
 };
 const NAMES = Object.keys(PLANET_DATA);
 const raDec = (ra, de) => [Math.cos(de * D2R) * Math.cos(ra * D2R), Math.cos(de * D2R) * Math.sin(ra * D2R), Math.sin(de * D2R)];
-// Saturn's major moons from JPL's mean orbital elements (SAT441, epoch 2000 Jan 1.5 TDB), referred to each moon's
-// local Laplace plane (pole RA/Dec in ICRF; the node is measured from that plane's ascending node on the ICRF
-// equator). The node regresses and the apsis advances with the listed periods. Good to about a degree of orbit.
-// a km, e, w (arg. of periapsis), M, i, node (deg), P (sidereal, days), Pw / Pn (apsis / node precession, years)
+// Saturn's major moons. Orbit planes and shapes are JPL's mean elements (SAT441) on each moon's local Laplace plane
+// (pole RA/Dec in ICRF; the node counts from the plane's ascending node on the ICRF equator, Z x P). The mean
+// longitude L (deg at J2000.0 TDB, from that same origin) and the period P were FITTED to JPL Horizons positions
+// every 9 days over 2016-2036; Titan's, Rhea's and Iapetus's eccentricity and periapsis too. Error over that span:
+// Titan 0.01 deg of orbit, Rhea 0.03, Iapetus 0.2, Tethys and Dione 0.6 at most (resonant librations), so well under
+// an arcsecond on the sky. (JPL's listed M put Rhea 157 deg and Tethys ~90 deg off: they are not for ephemerides.)
+// a km, e, w (arg. of periapsis at J2000), i, node (deg), Pw / Pn (apsis / node precession periods, years)
 const SATURN_MOONS = [
-  { name: 'Titan', a: 1221900, e: 0.029, w: 78.3, M: 11.7, i: 0.3, node: 78.6, P: 15.945448, Pw: 346.680, Pn: 687.370, ra: 36.4, dec: 84.0, mag: 8.3 },
-  { name: 'Rhea', a: 527200, e: 0.001, w: 44.3, M: 31.5, i: 0.3, node: 133.7, P: 4.517503, Pw: 33.939, Pn: 35.775, ra: 40.6, dec: 83.5, mag: 9.7 },
-  { name: 'Dione', a: 377700, e: 0.002, w: 116.0, M: 212.0, i: 0.0, node: 0.0, P: 2.736916, Pw: 11.698, Pn: 0, ra: 40.6, dec: 83.5, mag: 10.4 },
-  { name: 'Tethys', a: 295000, e: 0.001, w: 335.3, M: 0.0, i: 1.1, node: 273.0, P: 1.887802, Pw: 0.005, Pn: 4.982, ra: 40.6, dec: 83.5, mag: 10.2 },
-  { name: 'Iapetus', a: 3561700, e: 0.028, w: 254.5, M: 74.8, i: 7.6, node: 86.5, P: 79.331002, Pw: 1662.900, Pn: 3130.302, ra: 288.7, dec: 78.9, mag: 11.0 },
+  { name: 'Titan', a: 1221900, e: 0.0287, w: 129.61, L: 11.7382, P: 15.9454485, i: 0.3, node: 78.6, Pw: 346.680, Pn: 687.370, ra: 36.4, dec: 84.0, mag: 8.3 },
+  { name: 'Rhea', a: 527200, e: 0.001, w: 65.17, L: 52.1693, P: 4.5175027, i: 0.3, node: 133.7, Pw: 33.939, Pn: 35.775, ra: 40.6, dec: 83.5, mag: 9.7 },
+  { name: 'Dione', a: 377700, e: 0.002, w: 116.0, L: 176.9242, P: 2.7369156, i: 0.0, node: 0.0, Pw: 11.698, Pn: 0, ra: 40.6, dec: 83.5, mag: 10.4 },
+  { name: 'Tethys', a: 295000, e: 0.001, w: 335.3, L: 190.4293, P: 1.8878028, i: 1.1, node: 273.0, Pw: 0.005, Pn: 4.982, ra: 40.6, dec: 83.5, mag: 10.2 },
+  { name: 'Iapetus', a: 3561700, e: 0.0284, w: 264.94, L: 200.3063, P: 79.3310751, i: 7.6, node: 86.5, Pw: 1662.900, Pn: 3130.302, ra: 288.7, dec: 78.9, mag: 11.0 },
 ];
 // position of a moon relative to its planet (km, ICRF/EQJ) at d days after J2000
 function moonOffset(s, d) {
   const P = raDec(s.ra, s.dec), X = norm3(cross3([0, 0, 1], P)), Y = cross3(P, X);
   const node = (s.node - (s.Pn ? 360 * d / (s.Pn * 365.25) : 0)) * D2R;
-  // the mean longitude advances at the sidereal rate; the longitude of periapsis precesses forward
-  const lam0 = s.node + s.w + s.M, lam = (lam0 + 360 * d / s.P) * D2R;
-  const varpi = (s.node + s.w + (s.Pw ? 360 * d / (s.Pw * 365.25) : 0)) * D2R + (node - s.node * D2R);
+  const varpi = node + (s.w + (s.Pw ? 360 * d / (s.Pw * 365.25) : 0)) * D2R, lam = (s.L + 360 * d / s.P) * D2R;
   const M = lam - varpi, e = s.e, w = varpi - node;
   let E = M; for (let k = 0; k < 6; k++) E -= (E - e * Math.sin(E) - M) / (1 - e * Math.cos(E));
   const nu = 2 * Math.atan2(Math.sqrt(1 + e) * Math.sin(E / 2), Math.sqrt(1 - e) * Math.cos(E / 2)), r = s.a * (1 - e * Math.cos(E));
