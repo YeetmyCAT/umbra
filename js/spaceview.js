@@ -68,7 +68,8 @@ export class SpaceView {
           float occ = r < R*14.0 ? notMoon(d, mH, cross(mH, mF)) : 1.0;
           if (r < R) { float mu = sqrt(1.0 - (r/R)*(r/R)); vec3 Tsun = vec3(1.0); { float b = dot(uCamKm, d); if (b < 0.0) { float hg = length(uCamKm - d*b) - 6371.0; if (hg < 0.0) Tsun = vec3(0.0); else if (hg < 150.0) { float xr = exp(-hg/8.0)*70.8, xa = exp(-hg/1.2)*182.9; Tsun = exp(-(vec3(0.10, 0.17, 0.33)*xr + vec3(0.12, 0.13, 0.14)*xa)) / (1.0 + 6.0*exp(-hg/8.0)); } } } vec3 sH = normalize(cross(uSunDir, abs(uSunDir.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0))), sV = cross(sH, uSunDir); vec2 uv = vec2(dot(d, sH), dot(d, sV))/R; vec3 nW = normalize(sH*uv.x + sV*uv.y - uSunDir*sqrt(max(0.0, 1.0 - dot(uv, uv)))); col += uSunE*Tsun*2.15e4*(0.4 + 0.6*mu)*sunspots(transpose(uEqToWorld)*nW, mu)*uExposure*occ; }
           // corona and chromosphere (a millionth of the disc: they show when the Moon covers the Sun)
-          if (r < R*14.0) { vec3 sH2 = normalize(cross(uSunDir, vec3(0.0, 0.0, 1.0))); float th = atan(dot(d, cross(sH2, uSunDir)), dot(d, sH2)); col += uSunE*2.15e4*(vec3(1.0, 0.97, 0.93)*corona(r/R, th) + chromo(r/R, th))*uExposure*occ; }
+          // only when the Moon is at the Sun (a real solar eclipse), not when the Sun is behind the Earth
+          if (uMoonOcc > 0.5 && r < R*14.0) { vec3 sH2 = normalize(cross(uSunDir, vec3(0.0, 0.0, 1.0))); float th = atan(dot(d, cross(sH2, uSunDir)), dot(d, sH2)); col += uSunE*2.15e4*(vec3(1.0, 0.97, 0.93)*corona(r/R, th) + chromo(r/R, th))*uExposure*occ; }
           gl_FragColor = vec4(min(col, vec3(3.0e4)), 1.0); }`,
     });
     const mesh = new THREE.Mesh(g, m); mesh.frustumCulled = false; mesh.renderOrder = -100; return mesh;
@@ -107,8 +108,21 @@ export class SpaceView {
     const cy = Math.cos(this.yaw * DEG), sy = Math.sin(this.yaw * DEG), cp = Math.cos(this.pitch * DEG), sp = Math.sin(this.pitch * DEG);
     const dirL = fwd.clone().multiplyScalar(cp * cy).addScaledVector(right, cp * sy).addScaledVector(up, sp);
     this.fov = 60; const cam = this.cam; cam.fov = this.fov; cam.aspect = w / h; cam.up.copy(up);
-    cam.position.copy(dirL).multiplyScalar(this.dist); cam.lookAt(0, 0, 0); cam.near = Math.max(0.05, this.dist - this.shape.size * 1.2); cam.far = this.dist + this.shape.size * 3;
-    if (cam.near >= cam.far) cam.near = cam.far * 0.01;
+    cam.position.copy(dirL).multiplyScalar(this.dist); cam.lookAt(0, 0, 0);
+    {
+      // depth range fitted tightly around the model's parts (their bounding spheres), so the depth buffer resolves
+      // millimetres and thin panels never show their back faces through the front (z-fighting)
+      this.model.updateMatrixWorld(true);
+      let nr = Infinity, fr = 0; const bs = this._bs || (this._bs = new THREE.Sphere());
+      this.model.traverse(o => {
+        if (!o.isMesh) return;
+        if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
+        bs.copy(o.geometry.boundingSphere).applyMatrix4(o.matrixWorld);
+        const dc = bs.center.distanceTo(cam.position); nr = Math.min(nr, dc - bs.radius); fr = Math.max(fr, dc + bs.radius);
+      });
+      if (!isFinite(nr)) { nr = this.dist - this.shape.size; fr = this.dist + this.shape.size * 3; }
+      cam.far = fr * 1.01 + 0.01; cam.near = Math.max(nr * 0.98, cam.far * 2e-4, 0.005);
+    }
     cam.updateProjectionMatrix(); cam.updateMatrixWorld();
     // sky camera (direction only) and Earth camera (km, TEME)
     const skyCam = this.skyCam || (this.skyCam = new THREE.PerspectiveCamera());
@@ -149,7 +163,8 @@ export class SpaceView {
     La = Math.max(La, Lv * 1.27e5 * 0.6 / Math.PI * 0.35 * clamp(this.shape.size / this.dist, 0.15, 1));
     // (only when the Sun is really there: not when it is behind the Earth, which is straight down in the night view)
     if (Lv > 0 && dot3(sun, skyDir(skyCam)) > Math.cos(cam.fov * DEG * 0.6)) La = Math.max(La, 3000 * Lv * Math.max(open1, 2e-4));   // eclipsed Sun: exposure opens for the corona
-    this.adapt = Math.exp(lerp(Math.log(this.adapt), Math.log(La), 1 - Math.exp(-dt * 2.5)));
+    // adjusts to the dark more slowly (~2.5 s) than to light, so a sunrise or sunset stays visible instead of blowing out
+    this.adapt = Math.exp(lerp(Math.log(this.adapt), Math.log(La), 1 - Math.exp(-dt * (La > this.adapt ? 2.5 : 0.4))));
     // camera-like exposure (photographs from orbit): mid-tones of what is lit map to ~0.8
     let Ex = 0.8 / this.adapt * Math.pow(2, app.ev);
     Ex = Math.min(Ex, 3 * Math.pow(2, app.ev));   // night side: exposed for the city lights, like a long ISS exposure

@@ -196,7 +196,7 @@ export function makeEarth() {
           vec3 ps = p + uSun*(8.0/max(mus, 0.08)); float sh = smoothstep(0.18, 0.75, texture(uAux, llUV(normalize(ps))).r);
           vec3 Edir = uSunE*Tsun*max(mus, 0.0) + mE*Tmoon*max(mum, 0.0);
           float sv = solarVis(p + n*0.05);   // skylight follows the eclipse too
-          vec3 sky = (uSunE*smoothstep(-0.2, 0.3, mus)*vec3(0.12, 0.16, 0.25)*min(sv, 1.0) + mE*smoothstep(-0.2, 0.3, mum)*vec3(0.12, 0.16, 0.25))*0.25;   // skylight
+          vec3 sky = (uSunE*smoothstep(-0.2, 0.3, mus)*vec3(0.12, 0.16, 0.25)*min(sv, 1.0)*(mus < 0.0 ? pow(10.0, 0.4*asin(mus)*57.29578) : 1.0) + mE*smoothstep(-0.2, 0.3, mum)*vec3(0.12, 0.16, 0.25))*0.25;   // skylight
           vec3 surf = alb/PI*(Edir*(1.0 - 0.65*sh) + sky);
           // ocean: darker, with the Sun's glint spread by wave slopes (Cox-Munk, ~6 m/s wind)
           if (water > 0.01) {

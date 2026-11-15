@@ -98,8 +98,12 @@ export class Post {
     this.bright.mat.uniforms.t.value = this.rt.texture; r.setRenderTarget(this.b1); r.render(this.bright.scene, CAM);
     const bl = (s, d, dx, dy) => { this.blur.mat.uniforms.t.value = s.texture; this.blur.mat.uniforms.d.value.set(dx / s.width, dy / s.height); r.setRenderTarget(d); r.render(this.blur.scene, CAM); };
     bl(this.b1, this.b1b, 1, 0); bl(this.b1b, this.b1, 0, 1);
-    bl(this.b1, this.b2, 2, 0); bl(this.b2, this.b2b, 0, 2); bl(this.b2b, this.b2, 2, 0); bl(this.b2, this.b2b, 0, 2);
-    const u = this.final.mat.uniforms; u.t.value = this.rt.texture; u.tB1.value = this.b1.texture; u.tB2.value = this.b2b.texture;
+    // wide glow: taps one texel apart (repeated passes give the same width as the old two-texel steps, which left
+    // stepped copies of a bright thin limb stacked above and below it)
+    bl(this.b1, this.b2, 2, 0);
+    let a = this.b2, b = this.b2b;
+    for (let k = 0; k < 12; k++) { if (k < 8) bl(a, b, 0, 1); else bl(a, b, 1, 0); const t = a; a = b; b = t; }
+    const u = this.final.mat.uniforms; u.t.value = this.rt.texture; u.tB1.value = this.b1.texture; u.tB2.value = a.texture;
     r.setRenderTarget(null); r.render(this.final.scene, CAM);
   }
 }
