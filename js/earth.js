@@ -196,6 +196,8 @@ export function makeEarth() {
           vec3 alb = pow(textureGrad(uDay, uv, gx, gy).rgb, vec3(2.2));
           vec3 aux = textureGrad(uAux, uv, gx, gy).rgb;
           float water = smoothstep(0.35, 0.75, aux.g);
+          // open water: one deep-ocean colour, not the day map's sea-floor relief (the real ocean surface doesn't show it)
+          alb = mix(alb, vec3(0.006, 0.016, 0.045), water);
           float mus = dot(n, uSun), mum = dot(n, uMoon), muv = max(dot(n, -d), 0.02);
           vec3 Tsun = sunTS(p + n*0.05), Tmoon = sunT(p + n*0.05, uMoon);
           // clouds: a thin layer ~8 km up; their shadows fall where the sunward ray crosses the layer
@@ -209,7 +211,8 @@ export function makeEarth() {
           // ocean: darker, with the Sun's glint spread by wave slopes (Cox-Munk, ~6 m/s wind)
           if (water > 0.01) {
             vec3 hv = normalize(uSun - d); float nh = max(dot(n, hv), 1e-3), tan2 = (1.0 - nh*nh)/(nh*nh);
-            float s2 = 0.032, P = exp(-tan2/s2)/(PI*s2*nh*nh*nh*nh);
+            // wind varies from calm (2 m/s: a sharp, mirror-bright glint) to breezy (8 m/s: broad and dim) across the sea
+            float W = 2.0 + 6.0*vn(uv*vec2(360.0, 180.0)), s2 = 0.003 + 0.00512*W, P = exp(-tan2/s2)/(PI*s2*nh*nh*nh*nh);
             float F = 0.02 + 0.98*pow(1.0 - max(dot(hv, -d), 0.0), 5.0);
             vec3 glint = uSunE*Tsun*F*min(P/(4.0*max(muv, 0.08)), 60.0)*smoothstep(-0.01, 0.06, mus);
             vec3 hm = normalize(uMoon - d); float nm2 = max(dot(n, hm), 1e-3), tm2 = (1.0 - nm2*nm2)/(nm2*nm2);

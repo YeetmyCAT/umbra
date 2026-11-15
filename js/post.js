@@ -41,7 +41,7 @@ export class Post {
       const mat = new THREE.ShaderMaterial({
         uniforms: { uC: { value: new THREE.Vector2() }, uCen: { value: new THREE.Vector2() }, uCol: { value: new THREE.Vector3() }, uLen: { value: 100 }, uRot: { value: 0.3 }, uFlare: { value: 1 }, uVeil: { value: 0 } },
         depthTest: false, depthWrite: false, transparent: true, blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor, blendSrcAlpha: THREE.ZeroFactor, blendDstAlpha: THREE.OneFactor,
-        vertexShader: 'void main(){ gl_Position = vec4(position.xy, 0.0, 1.0); }',
+        vertexShader: 'void main(){ gl_Position = vec4(position.xy, 1.0, 1.0); }',   // at the far plane: depth tells model pixels apart
         // The eye's glare around a bright point (ciliary corona): many fine needle rays of uneven length and strength
         // radiating from a soft halo, instead of a camera's few hard spikes.
         fragmentShader: `uniform vec2 uC, uCen; uniform vec3 uCol; uniform float uLen, uRot, uFlare, uVeil;
@@ -83,15 +83,16 @@ export class Post {
     if (!(col[0] + col[1] + col[2] > 0.001)) return;
     this.starU.uC.value.set(pos[0], pos[1]); this.starU.uCol.value.set(col[0], col[1], col[2]); this.starU.uLen.value = len;
     this.starU.uCen.value.set(this.rt.width / 2, this.rt.height / 2); this.starU.uFlare.value = flare; this.starU.uVeil.value = veil;
-    // the glare is light added in the eye or lens: it covers a darker model (brightest wins) but never dims a brighter
-    // sky or limb behind it
+    // the glare is light added in the eye or lens. Over the satellite model (the only thing that writes depth before
+    // this) it is drawn 'over' the model so it reads as in front of it; everywhere else (sky, Earth, the bright limb)
+    // it is simply added on top, at full strength, so nothing behind it can block it
     this.r.setRenderTarget(this.rt);
+    const M = this.starMat;
     if (veil > 0) {
-      // 60 % brightest-wins (covers a darker model in front) + 40 % added (rays still show across a bright limb);
-      // over dark sky the two sum to the same glare as before
-      this.starMat.blendEquation = THREE.MaxEquation; this.starU.uCol.value.set(col[0] * 0.6, col[1] * 0.6, col[2] * 0.6); this.r.render(this.star, CAM);
-      this.starMat.blendEquation = THREE.AddEquation; this.starU.uVeil.value = 0; this.starU.uCol.value.set(col[0] * 0.4, col[1] * 0.4, col[2] * 0.4); this.r.render(this.star, CAM);
-    } else { this.starMat.blendEquation = THREE.AddEquation; this.r.render(this.star, CAM); }
+      M.depthTest = true; M.depthFunc = THREE.GreaterDepth; this.starU.uVeil.value = veil; this.r.render(this.star, CAM);
+      M.depthFunc = THREE.LessEqualDepth; this.starU.uVeil.value = 0; this.r.render(this.star, CAM);
+      M.depthTest = false; M.depthFunc = THREE.LessEqualDepth;
+    } else { this.starU.uVeil.value = 0; this.r.render(this.star, CAM); }
   }
   size(w, h) {
     if (this.w === w && this.h === h) return; this.w = w; this.h = h;
