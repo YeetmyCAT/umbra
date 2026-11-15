@@ -68,6 +68,7 @@ async function boot() {
   // a second worker for searches (passes, flares, transits) so positions never stall
   app.search = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
   const { elementsArray } = await import('./catalog.js');
+  app.elsArray = elementsArray;
   app.search.postMessage({ cmd: 'init', els: elementsArray(cat.objs), meta: cat.objs.map(metaOf) });
   app.search.onmessage = onSearchMsg;
   let p = null; try { p = JSON.parse(localStorage.getItem('um_place') || 'null'); } catch { }
@@ -102,7 +103,7 @@ async function checkCatalog(manual) {
       if (c.built > app.cat.built) {
         const byId = new Map(app.cat.objs.map(o => [o.id, o])), upd = [];
         for (const o of c.objs) { const old = byId.get(o.id); if (old && o.epoch > old.epoch) { Object.assign(old, { epoch: o.epoch, n: o.n, e: o.e, i: o.i, raan: o.raan, argp: o.argp, M: o.M, bstar: o.bstar, ndot: o.ndot }); upd.push(old); } }
-        app.tracker.updateElements(upd); app.search.postMessage({ cmd: 'update', list: upd.map(o => ({ idx: o.idx, el: o })) });
+        app.tracker.updateElements(upd); app.search.postMessage({ cmd: 'update', list: upd.map(o => ({ idx: o.idx, el: o })) }); if (evW) evW.postMessage({ cmd: 'update', list: upd.map(o => ({ idx: o.idx, el: o })) });
         app.cat.built = c.built; toast(`Updated orbits for ${upd.length.toLocaleString()} objects`);
       } else if (manual) toast('Orbital elements are already the newest available');
     }
@@ -177,7 +178,7 @@ function select(i, center) {
   if (center) { app.ground.lock = true; }
   lockBtn();
   // ask CelesTrak for the newest elements of this object (allowed once per 2 h per object)
-  refreshFromCelesTrak(o).then(r => { if (r.updated) { T.updateElements([o]); app.search.postMessage({ cmd: 'update', list: [{ idx: o.idx, el: o }] }); toast(`Newer orbit for ${o.name} from CelesTrak`); } });
+  refreshFromCelesTrak(o).then(r => { if (r.updated) { T.updateElements([o]); app.search.postMessage({ cmd: 'update', list: [{ idx: o.idx, el: o }] }); if (evW) evW.postMessage({ cmd: 'update', list: [{ idx: o.idx, el: o }] }); toast(`Newer orbit for ${o.name} from CelesTrak`); } });
   try { history.replaceState(null, '', '?sat=' + o.id); } catch { }
 }
 function lockBtn() { const b = $('bLock'); if (!b) return; b.classList.toggle('on', !!app.ground.lock); b.textContent = app.ground.lock ? 'Untrack' : 'Track'; }
@@ -224,6 +225,22 @@ function details() {
 // ---------- searches in the second worker ----------
 let reqN = 0; const pending = new Map();
 function ask(msg) { return new Promise(res => { const req = ++reqN; pending.set(req, res); app.search.postMessage({ ...msg, req }); }); }
+// Events searches run in a worker of their own, so a long one (e.g. conjunctions of a high-orbit satellite, which can
+// take many minutes) never holds up the pass list; and starting a new search stops one that is still running.
+let evW = null, evGen = 0; const evPending = new Map();
+function startEvents() {
+  evGen++;   // a search still looping (bright passes) sees this and stops
+  if (evW && evPending.size === 0) return;
+  if (evW) { evW.terminate(); evPending.clear(); }
+  evW = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+  evW.postMessage({ cmd: 'init', els: app.elsArray(app.cat.objs), meta: app.cat.objs.map(metaOf) });
+  evW.onmessage = e => {
+    const m = e.data;
+    if (m.cmd === 'flareProgress' || m.cmd === 'transitProgress' || m.cmd === 'conjProgress') { onSearchMsg(e); return; }
+    const r = evPending.get(m.req); if (r) { evPending.delete(m.req); r(m); }
+  };
+}
+function askEv(msg) { const w = evW; return new Promise(res => { const req = ++reqN; evPending.set(req, res); w.postMessage({ ...msg, req }); }); }
 function onSearchMsg(e) {
   const m = e.data;
   if (m.cmd === 'flareProgress' || m.cmd === 'transitProgress' || m.cmd === 'conjProgress') { $('evInfo').textContent = `Searching… ${m.done} of ${m.of}${m.cmd === 'conjProgress' ? ' passes' : ''}${m.found != null ? ` · ${m.found} found` : ''}`; return; }
@@ -250,7 +267,8 @@ async function flareSearch(kind) {
   if (kind === 'geo') { list = objs.filter(o => o.cls === 'geo' && o.type === 0 && o.n > 0.95 && o.n < 1.05 && o.ops !== '-' && o.ops !== 'D'); hours = 24; $('evInfo').textContent = 'GEO glints: sun-tracking arrays reflect sunlight back toward the anti-solar point; strongest within a few weeks of the equinoxes, just outside the Earth\'s shadow.'; }
   else { list = objs.filter(o => o.type === 0 && o.ops !== '-' && o.ops !== 'D' && ['iss', 'css', 'hst', 'iridiumnext', ...($('eStar').checked ? ['starlink'] : []), 'gps', 'galileo', 'glonass', 'beidou', 'oneweb', 'bluebird', 'kuiper', 'qianfan'].includes(o.cls) && T.docked[o.idx] < 0); hours = 12; $('evInfo').textContent = 'Specular flares from flat surfaces (arrays, mirror radiators, antennas, rocket stages), from each object\'s shape and attitude model.'; }
   $('evList').innerHTML = '';
-  const m = await ask({ cmd: 'flares', list: list.map(o => ({ idx: o.idx, meta: metaOf(o) })), obs: obsMsg(), t0: ms, hours, limit: 5.5 });
+  startEvents();
+  const m = await askEv({ cmd: 'flares', list: list.map(o => ({ idx: o.idx, meta: metaOf(o) })), obs: obsMsg(), t0: ms, hours, limit: 5.5 });
   const L = m.list.slice(0, 400);
   $('evInfo').textContent = `${m.list.length} flare${m.list.length === 1 ? '' : 's'} you could see (dark enough sky, above 8°) in the next ${hours} h (${list.length.toLocaleString()} objects checked). Tracked times are good to a few seconds if the elements are fresh; tumbling objects' timing is a model estimate.`;
   $('evList').innerHTML = L.map(f => `<div class="item" data-i="${f.idx}" data-t="${f.t}"><span class="n">${esc(f.name)}</span><span class="m">${f.mag.toFixed(1)}</span><span class="s">${fmtD(f.t)} ${fmtT(f.t)} · ${f.alt.toFixed(0)}° ${compass(f.az)} · +${(f.base - f.mag).toFixed(1)} mag over normal · ${f.dur.toFixed(f.dur < 10 ? 1 : 0)} s · ${esc(f.model)}</span></div>`).join('') || '<div class="note">None found.</div>';
@@ -260,7 +278,8 @@ async function transitSearch() {
   const T = app.tracker, ms = app.clock.now();
   const list = T.objs.filter(o => o.cls === 'iss' || o.cls === 'css' || o.cls === 'hst' || o.idx === app.sel);
   $('evInfo').textContent = 'Searching for transits of the Sun, the Moon and the planets over 14 days…'; $('evList').innerHTML = '';
-  const m = await ask({ cmd: 'transits', list: list.map(o => ({ idx: o.idx, meta: metaOf(o) })), obs: obsMsg(), t0: ms, days: 14 });
+  startEvents();
+  const m = await askEv({ cmd: 'transits', list: list.map(o => ({ idx: o.idx, meta: metaOf(o) })), obs: obsMsg(), t0: ms, days: 14 });
   $('evInfo').textContent = `${m.list.length} transit${m.list.length === 1 ? '' : 's'} or near misses (within 0.6°) in 14 days for ${list.map(o => o.name).join(', ')}. Near misses say how far to travel for a central crossing.`;
   $('evList').innerHTML = m.list.map(t => `<div class="item" data-i="${t.idx}" data-t="${t.t}"><span class="n">${({ Sun: '☀', Moon: '☾', Mercury: '☿', Venus: '♀', Mars: '♂', Jupiter: '♃', Saturn: '♄' })[t.body] || ''} ${esc(t.name)} ${t.inside ? 'crosses ' + (t.body === 'Sun' || t.body === 'Moon' ? 'the ' : '') + t.body : 'misses ' + (t.body === 'Sun' || t.body === 'Moon' ? 'the ' : '') + t.body}</span><span class="m">${t.inside ? (t.dur > 0 ? t.dur.toFixed(2) + ' s' : 'grazes') : t.planet ? (t.sepDeg * 3600).toFixed(0) + '″' : t.missKm.toFixed(0) + ' km'}</span><span class="s">${fmtD(t.t)} ${fmtT(t.t)} · ${t.sizeArcsec.toFixed(0)}″ silhouette · range ${t.rangeKm.toFixed(0)} km · ${t.planet ? 'planet ' + (t.radDeg * 7200).toFixed(1) + '″ across, ' + (t.sepDeg * 3600).toFixed(0) + '″ apart, centre line ' + t.centreKm.toFixed(1) + ' km away' : t.inside ? 'centre line ' + t.centreKm.toFixed(1) + ' km away' : 'move ~' + t.centreKm.toFixed(0) + ' km for a central crossing'}</span></div>`).join('') || '<div class="note">None in this period.</div>';
   bindEventItems();
@@ -270,7 +289,8 @@ async function conjSearch() {
   if (i < 0) { $('evInfo').textContent = 'Select a satellite first: conjunctions are searched for the selected object.'; $('evList').innerHTML = ''; return; }
   const o = T.objs[i];
   $('evInfo').textContent = `Searching ${o.name}'s passes in the next 24 h for objects crossing its line of sight…`; $('evList').innerHTML = '';
-  const m = await ask({ cmd: 'conjunctions', idx: i, meta: metaOf(o), obs: obsMsg(), t0: ms, days: 1 });
+  startEvents();
+  const m = await askEv({ cmd: 'conjunctions', idx: i, meta: metaOf(o), obs: obsMsg(), t0: ms, days: 1 });
   $('evInfo').textContent = `${m.list.length} close approaches (under 0.4°) with ${o.name} over ${m.passes} passes. "Occultation" means the two discs overlap: one passes in front of the other.`;
   $('evList').innerHTML = m.list.map(e => { const ob = T.objs[e.idx]; return `<div class="item" data-i="${i}" data-t="${e.t}" data-c="${e.idx}"><span class="n">${esc(ob.name)} ${e.occult ? (e.front === 'other' ? 'passes in front of' : 'passes behind') : (e.front === 'other' ? 'passes just in front of' : 'passes just behind')} ${esc(o.name)}</span><span class="m">${e.sepArcsec < 120 ? e.sepArcsec.toFixed(0) + '″' : e.sepDeg.toFixed(2) + '°'}</span><span class="s">${fmtD(e.t)} ${fmtT(e.t)} · alt ${e.alt.toFixed(0)}° · ${e.occult ? 'discs overlap (occultation)' : 'close approach'} · ${esc(o.name)} ${e.r0.toFixed(0)} km away, ${esc(ob.name)} ${e.r1.toFixed(0)} km · sizes ${e.size0.toFixed(1)}″ / ${e.size1.toFixed(1)}″ · ${e.lit0 && e.lit1 ? 'both sunlit' : e.lit0 || e.lit1 ? 'one sunlit' : 'both in shadow'}</span></div>`; }).join('') || '<div class="note">None in the next 24 hours.</div>';
   bindEventItems();
@@ -280,7 +300,9 @@ async function brightPasses() {
   const list = T.objs.filter(o => o.type !== 2 && o.n > 6 && ((o.mag != null && o.mag < 3.0) || ['iss', 'css', 'hst'].includes(o.cls))).slice(0, 160);
   $('evInfo').textContent = `Checking ${list.length} of the brightest objects for the next 2 days…`; $('evList').innerHTML = '';
   const out = [];
-  for (const o of list) { const m = await ask({ cmd: 'passes', idx: o.idx, meta: metaOf(o), obs: obsMsg(), t0: ms, days: 2, max: 12 }); for (const p of m.passes) if (p.visible && p.best < 2.5) out.push({ o, p }); }
+  startEvents(); const gen = evGen;
+  for (const o of list) { if (evGen !== gen) return; const m = await askEv({ cmd: 'passes', idx: o.idx, meta: metaOf(o), obs: obsMsg(), t0: ms, days: 2, max: 12 }); for (const p of m.passes) if (p.visible && p.best < 2.5) out.push({ o, p }); }
+  if (evGen !== gen) return;
   out.sort((a, b) => a.p.visStart - b.p.visStart);
   $('evInfo').textContent = `${out.length} passes brighter than mag 2.5 in the next 2 days.`;
   $('evList').innerHTML = out.map(({ o, p }) => `<div class="item" data-i="${o.idx}" data-t="${p.visStart - 20e3}"><span class="n">${esc(o.name)}</span><span class="m">${p.best.toFixed(1)}</span><span class="s">${fmtD(p.visStart)} ${fmtT(p.visStart, false)}–${fmtT(p.visEnd, false)} · max ${p.maxAlt.toFixed(0)}° ${compass(p.azMax)} · from ${compass(p.azVis0)} to ${compass(p.azVis1)}</span></div>`).join('');

@@ -1,5 +1,5 @@
 // Simulation clock shared by every view: real time, paused, or running at any rate (also backwards).
-export const RATES = [-86400, -18000, -3600, -600, -60, -10, -1, 0, 1, 10, 60, 600, 3600, 18000, 86400];
+export const RATES = [-86400, -18000, -3600, -600, -60, -10, -1, 0, 0.25, 1, 10, 60, 600, 3600, 18000, 86400];
 export class Clock {
   constructor() { this.base = Date.now(); this.at = performance.now(); this.rate = 1; this.listeners = []; }
   now() { return this.base + (performance.now() - this.at) * this.rate; }
