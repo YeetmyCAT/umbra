@@ -17,12 +17,31 @@ export const PLANET_DATA = {
 };
 const NAMES = Object.keys(PLANET_DATA);
 const raDec = (ra, de) => [Math.cos(de * D2R) * Math.cos(ra * D2R), Math.cos(de * D2R) * Math.sin(ra * D2R), Math.sin(de * D2R)];
-// Saturn's major moons on circular orbits in the ring plane (approximate positions; mean motion from their periods)
+// Saturn's major moons from JPL's mean orbital elements (SAT441, epoch 2000 Jan 1.5 TDB), referred to each moon's
+// local Laplace plane (pole RA/Dec in ICRF; the node is measured from that plane's ascending node on the ICRF
+// equator). The node regresses and the apsis advances with the listed periods. Good to about a degree of orbit.
+// a km, e, w (arg. of periapsis), M, i, node (deg), P (sidereal, days), Pw / Pn (apsis / node precession, years)
 const SATURN_MOONS = [
-  { name: 'Titan', a: 1221870, P: 15.945421, L0: 120, mag: 8.3 }, { name: 'Rhea', a: 527108, P: 4.518212, L0: 30, mag: 9.7 },
-  { name: 'Dione', a: 377396, P: 2.736915, L0: 250, mag: 10.4 }, { name: 'Tethys', a: 294619, P: 1.887802, L0: 300, mag: 10.2 },
-  { name: 'Iapetus', a: 3560820, P: 79.3215, L0: 200, mag: 11.0 },
+  { name: 'Titan', a: 1221900, e: 0.029, w: 78.3, M: 11.7, i: 0.3, node: 78.6, P: 15.945448, Pw: 346.680, Pn: 687.370, ra: 36.4, dec: 84.0, mag: 8.3 },
+  { name: 'Rhea', a: 527200, e: 0.001, w: 44.3, M: 31.5, i: 0.3, node: 133.7, P: 4.517503, Pw: 33.939, Pn: 35.775, ra: 40.6, dec: 83.5, mag: 9.7 },
+  { name: 'Dione', a: 377700, e: 0.002, w: 116.0, M: 212.0, i: 0.0, node: 0.0, P: 2.736916, Pw: 11.698, Pn: 0, ra: 40.6, dec: 83.5, mag: 10.4 },
+  { name: 'Tethys', a: 295000, e: 0.001, w: 335.3, M: 0.0, i: 1.1, node: 273.0, P: 1.887802, Pw: 0.005, Pn: 4.982, ra: 40.6, dec: 83.5, mag: 10.2 },
+  { name: 'Iapetus', a: 3561700, e: 0.028, w: 254.5, M: 74.8, i: 7.6, node: 86.5, P: 79.331002, Pw: 1662.900, Pn: 3130.302, ra: 288.7, dec: 78.9, mag: 11.0 },
 ];
+// position of a moon relative to its planet (km, ICRF/EQJ) at d days after J2000
+function moonOffset(s, d) {
+  const P = raDec(s.ra, s.dec), X = norm3(cross3([0, 0, 1], P)), Y = cross3(P, X);
+  const node = (s.node - (s.Pn ? 360 * d / (s.Pn * 365.25) : 0)) * D2R;
+  // the mean longitude advances at the sidereal rate; the longitude of periapsis precesses forward
+  const lam0 = s.node + s.w + s.M, lam = (lam0 + 360 * d / s.P) * D2R;
+  const varpi = (s.node + s.w + (s.Pw ? 360 * d / (s.Pw * 365.25) : 0)) * D2R + (node - s.node * D2R);
+  const M = lam - varpi, e = s.e, w = varpi - node;
+  let E = M; for (let k = 0; k < 6; k++) E -= (E - e * Math.sin(E) - M) / (1 - e * Math.cos(E));
+  const nu = 2 * Math.atan2(Math.sqrt(1 + e) * Math.sin(E / 2), Math.sqrt(1 - e) * Math.cos(E / 2)), r = s.a * (1 - e * Math.cos(E));
+  const u = nu + w, ci = Math.cos(s.i * D2R), si = Math.sin(s.i * D2R);
+  const x = r * (Math.cos(node) * Math.cos(u) - Math.sin(node) * Math.sin(u) * ci), y = r * (Math.sin(node) * Math.cos(u) + Math.cos(node) * Math.sin(u) * ci), z = r * Math.sin(u) * si;
+  return [x * X[0] + y * Y[0] + z * P[0], x * X[1] + y * Y[1] + z * P[1], x * X[2] + y * Y[2] + z * P[2]];
+}
 const GALILEAN = [['io', 'Io', 5.0], ['europa', 'Europa', 5.3], ['ganymede', 'Ganymede', 4.6], ['callisto', 'Callisto', 5.6]];
 
 export class PlanetDiscs {
@@ -172,14 +191,14 @@ export class PlanetDiscs {
       }
     } catch { }
     {
-      const si = this.info.Saturn, pole = [si.pole.x, si.pole.y, si.pole.z];
-      const e1 = norm3(cross3(pole, [0, 0, 1])), e2 = cross3(pole, e1);
+      // real positions (JPL mean elements), seen at the light-time-corrected instant like the planet itself
+      const si = this.info.Saturn, sg = Ast.Equator('Saturn', date, obsAstro, false, true);
+      const sv = sg.vec ? [sg.vec.x, sg.vec.y, sg.vec.z] : raDec(sg.ra * 15, sg.dec), svl = Math.hypot(...sv);
+      const dl = d - si.dist / 299792.458 / 86400, AUk = 149597870.7;
       for (const s of SATURN_MOONS) {
-        const L = (s.L0 + 360 * d / s.P) * D2R, off = s.a / si.dist;   // radians on the sky (projected below)
-        const v3 = [e1[0] * Math.cos(L) + e2[0] * Math.sin(L), e1[1] * Math.cos(L) + e2[1] * Math.sin(L), e1[2] * Math.cos(L) + e2[2] * Math.sin(L)];
-        const w = norm3([si.dirU[0] + v3[0] * off, si.dirU[1] + v3[1] * off, si.dirU[2] + v3[2] * off]);
-        const behind = dot3(v3, si.dirU) > 0 && angle(w, si.dirU) < si.rad;
-        P.set(w, k * 3); M[k] = behind ? 30 : s.mag; this.moonLabels.push({ name: s.name + ' (approx.)', dir: w, parent: 'Saturn' }); k++;
+        const o = moonOffset(s, dl), v = [sv[0] + o[0] / AUk, sv[1] + o[1] / AUk, sv[2] + o[2] / AUk], l = Math.hypot(...v), w = toW(v.map(x => x / l));
+        const behind = l > svl && angle(w, si.dirU) < si.rad;   // hidden behind Saturn
+        P.set(w, k * 3); M[k] = behind ? 30 : s.mag; this.moonLabels.push({ name: s.name, dir: w, parent: 'Saturn' }); k++;
         if (k >= 9) break;
       }
     }
