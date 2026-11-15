@@ -96,13 +96,18 @@ export function makeEarth() {
         int N = int(uSteps);
         // rays skimming the limb cross a very long, dense path: more samples there, or the glow shows a thin separate
         // arc as if seen through the Earth
-        { float th = length(o + d*max(-dot(o, d), 0.0)) - R; if (abs(th) < 40.0 && uSteps > 9.0) N = 24; }
+        float thR = length(o + d*max(-dot(o, d), 0.0)) - R;   // closest approach to the surface (negative: hits it)
+        if (thR > -40.0 && uSteps > 9.0) N = 64;   // every ray through the air above the limb: no switch point to show as a line
+        // right at the limb a grazing ray also sees the air beyond the tangent point, while a ray just below it stops at
+        // the surface: both of those are seen through ~70 air masses (negligible), so they fade out over the last 8 km
+        // on either side and the two kinds of ray meet without a coloured line
+        float farW = ground ? 1.0 : smoothstep(0.0, 8.0, thR), surfW = ground ? 1.0 - smoothstep(-8.0, 0.0, thR) : 1.0;
         float seg = t1 - t0;
         // where the air is densest along this ray: the tangent point for rays skimming the limb, the far end for rays
         // that reach the ground; samples crowd there (quadratically), so the glow fades smoothly with no stepped edge
         float tm = clamp(-dot(o, d), t0, t1); if (ground) tm = t1;
         float hA = tm - t0, hB = t1 - tm;
-        for (int i = 0; i < 24; i++) {
+        for (int i = 0; i < 64; i++) {
           if (i >= N) break;
           float v0 = float(i)/float(N), v1 = float(i + 1)/float(N), a, b;
           if (ground) { a = t1 - seg*(1.0 - v0)*(1.0 - v0); b = t1 - seg*(1.0 - v1)*(1.0 - v1); }
@@ -115,7 +120,7 @@ export function makeEarth() {
           vec3 S = (bR*dr*pR(cs) + vec3(bM*dm)*pM(cs))*Tp*uSunE + (bR*dr*pR(cmn) + vec3(bM*dm)*pM(cmn))*Tq*mE;
           S += (bR*dr + vec3(bM*dm))*(Tp*uSunE + Tq*mE)*0.06/(4.0*PI);
           vec3 st = exp(-ext*dt);
-          Ls += T*S*(1.0 - st)/max(ext, vec3(1e-7));
+          Ls += T*S*(1.0 - st)/max(ext, vec3(1e-7))*((!ground && 0.5*(a + b) > tm) ? farW : 1.0);
           T *= st;
         }
         // ---- aurora (emission, night side) ----
@@ -219,7 +224,7 @@ export function makeEarth() {
           vec3 lights = vec3(lt)*vec3(1.0, 0.76, 0.45)*4.0*smoothstep(0.08, -0.12, mus);
           vec3 cloudCol = vec3(0.78)/PI*(Edir + sky*1.5) + lights*0.12;
           surf = mix(surf + lights, cloudCol, cl);
-          col = Ls + aur + ag + T*surf;
+          col = Ls + aur + ag + T*surf*surfW;
           alpha = 1.0;
         }
         gl_FragColor = vec4(min(col*uExposure, vec3(3.0e4)), alpha);

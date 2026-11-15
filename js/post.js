@@ -85,8 +85,13 @@ export class Post {
     this.starU.uCen.value.set(this.rt.width / 2, this.rt.height / 2); this.starU.uFlare.value = flare; this.starU.uVeil.value = veil;
     // the glare is light added in the eye or lens: it covers a darker model (brightest wins) but never dims a brighter
     // sky or limb behind it
-    this.starMat.blendEquation = veil > 0 ? THREE.MaxEquation : THREE.AddEquation;
-    this.r.setRenderTarget(this.rt); this.r.render(this.star, CAM);
+    this.r.setRenderTarget(this.rt);
+    if (veil > 0) {
+      // 60 % brightest-wins (covers a darker model in front) + 40 % added (rays still show across a bright limb);
+      // over dark sky the two sum to the same glare as before
+      this.starMat.blendEquation = THREE.MaxEquation; this.starU.uCol.value.set(col[0] * 0.6, col[1] * 0.6, col[2] * 0.6); this.r.render(this.star, CAM);
+      this.starMat.blendEquation = THREE.AddEquation; this.starU.uVeil.value = 0; this.starU.uCol.value.set(col[0] * 0.4, col[1] * 0.4, col[2] * 0.4); this.r.render(this.star, CAM);
+    } else { this.starMat.blendEquation = THREE.AddEquation; this.r.render(this.star, CAM); }
   }
   size(w, h) {
     if (this.w === w && this.h === h) return; this.w = w; this.h = h;
