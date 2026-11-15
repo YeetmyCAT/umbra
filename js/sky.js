@@ -6,7 +6,7 @@ import { SOLAR_GLSL, LUNAR_GLSL } from './eclipse.js';
 // eclipse uniforms shared by the Sun, the Moon and the sky (defaults: nothing in front of the Sun, no lunar eclipse)
 export function eclipseUniforms(U) {
   if (U.uMoonOcc) return;
-  Object.assign(U, { uMoonOcc: { value: 0 }, uOcc1: { value: new THREE.Vector4() }, uOcc2: { value: new THREE.Vector4() }, uSunDiscK: { value: 1 }, uLunAx: { value: new THREE.Vector3(0, 0, 1) }, uLunR: { value: new THREE.Vector2() } });
+  Object.assign(U, { uMoonOcc: { value: 0 }, uOcc1: { value: new THREE.Vector4(0, 0, 1, 0) }, uOcc2: { value: new THREE.Vector4(0, 0, 1, 0) }, uSunDiscK: { value: 1 }, uLunAx: { value: new THREE.Vector3(0, 0, 1) }, uLunR: { value: new THREE.Vector2() } });
   if (!U.uMoonRadius) U.uMoonRadius = { value: 0.0045 };
 }
 

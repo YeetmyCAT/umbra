@@ -24,12 +24,16 @@ onmessage = e => {
   } else if (m.cmd === 'update') {   // fresher elements for some objects (live CelesTrak refresh)
     for (const u of m.list) { try { recs[u.idx] = ommToSatrec(u.el); } catch { } }
   } else if (m.cmd === 'prop') {
-    const N = recs.length, buf = new Float32Array(N * 6), ok = new Uint8Array(N);
+    // exact states at both ends of the segment [t, t2] (double precision: float32 was ~0.5 m of noise)
+    const N = recs.length, t2 = m.t2 ?? m.t, buf = m.recycle && m.recycle.length === N * 12 ? m.recycle : new Float64Array(N * 12), ok = new Uint8Array(N);
     for (let i = 0; i < N; i++) {
       const r = recs[i]; if (!r) continue;
-      if (propagate(r, m.t, st)) { ok[i] = 1; for (let j = 0; j < 6; j++) buf[i * 6 + j] = st[j]; }
+      if (!propagate(r, m.t, st)) continue;
+      for (let j = 0; j < 6; j++) buf[i * 12 + j] = st[j];
+      if (t2 === m.t) { for (let j = 0; j < 6; j++) buf[i * 12 + 6 + j] = st[j]; ok[i] = 1; }
+      else if (propagate(r, t2, st)) { for (let j = 0; j < 6; j++) buf[i * 12 + 6 + j] = st[j]; ok[i] = 1; }
     }
-    postMessage({ cmd: 'prop', t: m.t, buf, ok, seq: m.seq }, [buf.buffer, ok.buffer]);
+    postMessage({ cmd: 'prop', t: m.t, t2, buf, ok, seq: m.seq }, [buf.buffer, ok.buffer]);
   } else if (m.cmd === 'passes') postMessage({ cmd: 'passes', idx: m.idx, req: m.req, passes: passes(m) });
   else if (m.cmd === 'flares') flares(m);
   else if (m.cmd === 'transits') transits(m);

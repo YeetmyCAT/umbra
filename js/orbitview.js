@@ -42,6 +42,50 @@ export class OrbitView {
     this.bg = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ size: 1, sizeAttenuation: false, color: 0x3a4255 }));
     const sp = []; for (let k = 0; k < 2500; k++) { const u = Math.random() * 2 - 1, t = Math.random() * 6.283, q = Math.sqrt(1 - u * u); sp.push(q * Math.cos(t) * 1e6, q * Math.sin(t) * 1e6, u * 1e6); }
     this.bg.geometry.setAttribute('position', new THREE.Float32BufferAttribute(sp, 3)); this.bgScene = new THREE.Scene(); this.bgScene.add(this.bg);
+    this.makeSunMoon();
+  }
+  // The Sun (a limb-darkened disc in its true direction: it is so far that only the direction matters) and the Moon
+  // (a real-size sphere at its true geocentric position, lit by the Sun, near side toward the Earth, and darkened and
+  // reddened by the Earth's shadow during a lunar eclipse)
+  makeSunMoon() {
+    this.sunU = { uExp: { value: 1 } };
+    this.sunMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
+      uniforms: this.sunU, depthTest: false, depthWrite: false, transparent: true, blending: THREE.AdditiveBlending,
+      vertexShader: 'out vec2 vQ; void main(){ vQ = position.xy*1.04; gl_Position = projectionMatrix*modelViewMatrix*vec4(position, 1.0); }',
+      fragmentShader: `in vec2 vQ; uniform float uExp;
+        void main(){ float r2 = dot(vQ, vQ); if (r2 > 1.0) discard; float mu = sqrt(1.0 - r2);
+          vec3 L = vec3(1.0, 0.985, 0.95)*1.27e5*2.15e4*(0.4 + 0.6*mu)*smoothstep(1.0, 0.96, r2);
+          gl_FragColor = vec4(min(L*uExp, vec3(3.0e4)), 1.0); }`,
+    }));
+    this.sunMesh.frustumCulled = false; this.sunMesh.renderOrder = 5; this.bgScene.add(this.sunMesh);
+    const tex = new THREE.TextureLoader().load('data/moon.jpg', t => { t.wrapS = THREE.RepeatWrapping; t.needsUpdate = true; this.moonU.uOK.value = 1; });
+    this.moonU = { uS: { value: new THREE.Vector3(1, 0, 0) }, uMap: { value: tex }, uOK: { value: 0 }, uExp: { value: 1 }, uC: { value: new THREE.Vector3() } };
+    this.moonMesh = new THREE.Mesh(new THREE.SphereGeometry(1737.4, 64, 32), new THREE.ShaderMaterial({
+      uniforms: this.moonU, depthTest: false, depthWrite: false,
+      vertexShader: 'out vec3 vN, vP; void main(){ vN = normalize(mat3(modelMatrix)*normal); vec4 w = modelMatrix*vec4(position, 1.0); vP = w.xyz; gl_Position = projectionMatrix*viewMatrix*w; }',
+      fragmentShader: `in vec3 vN, vP; uniform vec3 uS, uC; uniform sampler2D uMap; uniform float uOK, uExp;
+        void main(){
+          vec3 n = normalize(vN);
+          vec3 ex = normalize(-uC), ey = normalize(cross(vec3(0.0, 0.0, 1.0), ex)), ez = cross(ex, ey);
+          float lon = atan(dot(n, ey), dot(n, ex)), lat = asin(clamp(dot(n, ez), -1.0, 1.0));
+          float gm = texture(uMap, vec2(0.5 + lon/6.2831853, 0.5 + lat/3.14159265)).r;
+          float alb = uOK > 0.5 ? 0.12*pow(gm, 1.3)/0.4224 : 0.12;
+          float ci = max(dot(n, uS), 0.0), ce = max(dot(n, normalize(cameraPosition - vP)), 0.0);
+          float ls = ci > 0.0 ? 2.0*ci/(ci + ce + 1e-4) : 0.0;   // Lommel-Seeliger, as in the sky view
+          // the Earth's shadow (same law as the Sky view's lunar eclipse)
+          float D = -dot(vP, uS), k = 1.0; vec3 tint = vec3(1.0), red = vec3(2.2, 0.62, 0.22);
+          if (D > 0.0) {
+            float rho = length(vP + uS*D), ru = 6498.4 - D*(696000.0 - 6498.4)/1.496e8, rp = 6498.4 + D*(696000.0 + 6498.4)/1.496e8;
+            if (rho < rp) {
+              if (rho > ru) { float x = (rho - ru)/(rp - ru); k = 0.0025 + 0.9975*pow(x, 1.15); tint = mix(vec3(1.0), red, clamp(1.0 - x*6.0, 0.0, 1.0)*0.5); }
+              else { float u = rho/max(ru, 1.0); k = 2.5e-4 + 1.8e-3*pow(u, 4.0); tint = red; }
+            }
+          }
+          vec3 L = vec3(1.0, 0.96, 0.9)*1.27e5*alb/3.14159265*ls*k*tint;
+          gl_FragColor = vec4(min(L*uExp, vec3(3.0e4)), 1.0);
+        }`,
+    }));
+    this.moonMesh.frustumCulled = false; this.moonScene = new THREE.Scene(); this.moonScene.add(this.moonMesh);
   }
   frame(dt, ms, w, h, dpr) {
     const app = this.app, T = app.tracker, E = this.earth.U;
@@ -55,7 +99,17 @@ export class OrbitView {
     if ((this.fn = (this.fn || 0) + 1) % 8 === 1) { const m = meterEarth(this.r, this.earth, cam); if (m) this.la = m.La; }
     this.adapt = Math.exp((Math.log(this.adapt || 3000) * 0.85 + Math.log(Math.max(this.la || 3000, 2e-3)) * 0.15));
     E.uExposure.value = Math.min(0.8 / this.adapt, 3) * Math.pow(2, app.ev);
-    try { const smp = sunMoonTEME(ms); E.uSun.value.set(...smp.sun).normalize(); setEarthEclipse(E, smp, Math.pow(10, -0.4 * (app.moonMag + 13.99)) || 0.1); } catch { E.uMoonE.value = 0.1; }
+    let smp = null;
+    try { smp = sunMoonTEME(ms); E.uSun.value.set(...smp.sun).normalize(); setEarthEclipse(E, smp, Math.pow(10, -0.4 * (app.moonMag + 13.99)) || 0.1); } catch { E.uMoonE.value = 0.1; }
+    const sDir = E.uSun.value.clone().normalize();
+    {   // Sun: a disc 0.53 deg across, a million km out along its direction (well inside the far plane)
+      const sd = smp ? Math.hypot(...smp.sun) : 1.496e8, R = Math.atan(696000 / sd) * 1e6;
+      this.sunMesh.position.copy(cam.position).addScaledVector(sDir, 1e6); this.sunMesh.quaternion.copy(cam.quaternion); this.sunMesh.scale.setScalar(R);
+      this.sunU.uExp.value = E.uExposure.value;
+    }
+    if (smp) {
+      this.moonMesh.position.set(...smp.moon); this.moonU.uC.value.set(...smp.moon); this.moonU.uS.value.copy(sDir); this.moonU.uExp.value = E.uExposure.value;
+    }
     // dots
     const g = this.pts.geometry, P = g.attributes.position.array, Lt = g.attributes.lit.array, S = g.attributes.show.array, f = app.filter;
     for (let i = 0; i < T.N; i++) {
@@ -71,14 +125,29 @@ export class OrbitView {
     const R = this.r;
     R.setRenderTarget(app.post.rt); R.setClearColor(0, 1); R.clear();
     R.render(this.bgScene, cam);
+    // the Moon in front of the Earth only when it is nearer to the camera than the Earth is
+    const moonFirst = cam.position.distanceTo(this.moonMesh.position) > cam.position.length();
+    if (moonFirst) R.render(this.moonScene, cam);
     R.render(this.earth.scene, cam);
+    if (!moonFirst) R.render(this.moonScene, cam);
     R.render(this.scene, cam);
+    // the eye's glare around the Sun when the Earth does not hide it (its limb and air included)
+    const sunHidden = (() => { const c = cam.position, b = c.dot(sDir); return b < 0 && c.clone().addScaledVector(sDir, -b).length() < 6371 + 60; })();
+    const sv = cam.position.clone().addScaledVector(sDir, 1e6).applyMatrix4(cam.matrixWorldInverse);
+    if (!sunHidden && sv.z < 0) { sv.applyMatrix4(cam.projectionMatrix); const W = app.post.rt.width, H = app.post.rt.height; app.post.sunStar([(sv.x * 0.5 + 0.5) * W, (sv.y * 0.5 + 0.5) * H], [0.5, 0.49, 0.47], Math.min(W, H) * 0.16); }
     app.post.final.mat.uniforms.uScot.value = 0;
     app.post.finish();
     const ov = app.overlay; ov.begin(w, h); const c = ov.ctx;
     c.font = '11px system-ui, sans-serif'; c.textAlign = 'left';
     const leg = [['Active payload', '#5f8'], ['Inactive payload', '#8bf'], ['Rocket body', '#fa5'], ['Debris', '#f66'], ['Unknown', '#ccc']];
     leg.forEach(([t, col], k) => { c.fillStyle = col; c.fillRect(12, 70 + k * 16, 8, 8); c.fillStyle = 'rgba(220,230,255,0.85)'; c.fillText(t, 26, 78 + k * 16); });
+    // labels for the Sun and the Moon (only when not behind the Earth)
+    c.font = '12px system-ui, sans-serif'; c.fillStyle = 'rgba(255,225,170,0.9)';
+    const hiddenBy = (p) => { const cp = cam.position, dx = p.x - cp.x, dy = p.y - cp.y, dz = p.z - cp.z, L = Math.hypot(dx, dy, dz), b = (cp.x * dx + cp.y * dy + cp.z * dz) / L, cc = cp.lengthSq() - 6371 * 6371, di = b * b - cc; return di > 0 && -b - Math.sqrt(di) > 0 && -b - Math.sqrt(di) < L; };
+    for (const [name, p] of [['Sun', cam.position.clone().addScaledVector(sDir, 1e6)], ['Moon', this.moonMesh.position]]) {
+      if (hiddenBy(p)) continue; const v = p.clone().project(cam); if (v.z > 1 || Math.abs(v.x) > 1.1 || Math.abs(v.y) > 1.1) continue;
+      c.fillText(name, (v.x * 0.5 + 0.5) * w + 8, (0.5 - v.y * 0.5) * h - 8);
+    }
     ov.end();
   }
   makeOrbit(ms) {
