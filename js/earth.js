@@ -94,9 +94,6 @@ export function makeEarth() {
         // ---- view-ray scattering ----
         vec3 Ls = vec3(0.0), T = vec3(1.0);
         int N = int(uSteps);
-        // rays skimming the limb (tangent height within ~40 km of the surface) cross a very long, dense path: too few
-        // samples there left a thin dark band just above the limb, like a second horizon behind the curve
-        { float th = length(o + d*max(-dot(o, d), 0.0)) - R; if (abs(th) < 40.0 && uSteps > 9.0) N = 24; }
         float seg = t1 - t0;
         // where the air is densest along this ray: the tangent point for rays skimming the limb, the far end for rays
         // that reach the ground; samples crowd there (quadratically), so the glow fades smoothly with no stepped edge

@@ -159,8 +159,7 @@ float corona(float r, float th){
   float eq = 0.55 + 0.45*pow(abs(cos(th)), 2.0);
   float st = 0.6 + 0.9*pow(ecN(th*9.5 + 2.0), 2.0) + 0.5*pow(ecN(th*31.0 + 5.0), 3.0)*smoothstep(1.0, 1.6, r);
   float rays = 0.85 + 0.3*ecN(th*140.0);
-  // fades out well before the drawing limit (14 radii), so a blown-out exposure never shows its edge as a ring
-  return base*eq*st*rays*(1.0 - smoothstep(6.0, 13.5, r));
+  return base*eq*st*rays;
 }
 vec3 chromo(float r, float th){
   if (r < 1.0) return vec3(0.0);

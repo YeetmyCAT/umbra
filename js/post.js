@@ -78,14 +78,11 @@ export class Post {
             gl_FragColor = vec4(c, uVeil*clamp(dot(c, vec3(0.2126, 0.7152, 0.0722))*1.5, 0.0, 0.97));
           }`,
       });
-      const m = new THREE.Mesh(g, mat); m.frustumCulled = false; this.star = new THREE.Scene(); this.star.add(m); this.starU = mat.uniforms; this.starMat = mat;
+      const m = new THREE.Mesh(g, mat); m.frustumCulled = false; this.star = new THREE.Scene(); this.star.add(m); this.starU = mat.uniforms;
     }
     if (!(col[0] + col[1] + col[2] > 0.001)) return;
     this.starU.uC.value.set(pos[0], pos[1]); this.starU.uCol.value.set(col[0], col[1], col[2]); this.starU.uLen.value = len;
-    this.starU.uCen.value.set(this.rt.width / 2, this.rt.height / 2); this.starU.uFlare.value = flare; this.starU.uVeil.value = 0;
-    // veil: brightest-of (max) blending, so the glare covers a dark model in front of it but never darkens a brighter
-    // sky behind it (an 'over' blend drew a dark disc around a faint star against an overexposed limb)
-    this.starMat.blendEquation = veil > 0 ? THREE.MaxEquation : THREE.AddEquation;
+    this.starU.uCen.value.set(this.rt.width / 2, this.rt.height / 2); this.starU.uFlare.value = flare; this.starU.uVeil.value = veil;
     this.r.setRenderTarget(this.rt); this.r.render(this.star, CAM);
   }
   size(w, h) {
