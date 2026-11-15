@@ -108,7 +108,7 @@ input { font: inherit; color: inherit; }
 .cardHead > div:first-child { cursor: pointer; }
 
 .cHeadBtns { display: flex; gap: 2px; align-items: flex-start; }
-#cMin { font-size: 18px; padding: 0 6px; }
+#cMin { font-size: 18px; padding: 0 6px; margin-right: 22px; }   /* well apart from the close button (mis-taps on phones) */
 #card.mini { padding: 6px 10px; }
 #card.mini .cSub { display: none; }
 #card.mini .cLive { margin: 4px 0 0; }

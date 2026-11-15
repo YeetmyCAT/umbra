@@ -1,5 +1,5 @@
 // Offline support: app files cached (bump APP when they change); orbital data always tried from the network first.
-const APP = 'umbra-app-v23', DATA = 'umbra-data';
+const APP = 'umbra-app-v24', DATA = 'umbra-data';
 const FILES = ['./', 'index.html', 'css/app.css', 'manifest.webmanifest', 'js/main.js', 'js/catalog.js', 'js/tracker.js', 'js/worker.js', 'js/sgp.js', 'js/frames.js', 'js/light.js', 'js/sight.js', 'js/shapes.js', 'js/purpose.js',
   'js/models3d.js', 'js/groundview.js', 'js/spaceview.js', 'js/orbitview.js', 'js/earth.js', 'js/sky.js', 'js/glsl.js', 'js/astro.js', 'js/post.js', 'js/clock.js', 'js/planets.js', 'js/eclipse.js',
   'vendor/three.module.min.js', 'vendor/satellite.min.js', 'vendor/astronomy.browser.min.js', 'vendor/leaflet/leaflet.js', 'vendor/leaflet/leaflet.css',
