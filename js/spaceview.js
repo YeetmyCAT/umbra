@@ -222,7 +222,9 @@ export class SpaceView {
     for (let i = 0; i < T.N && k < this.MAX; i++) {
       if (i === self) continue;
       const dx = T.pos[i * 3] - rv.x, dy = T.pos[i * 3 + 1] - rv.y, dz = T.pos[i * 3 + 2] - rv.z, d2 = dx * dx + dy * dy + dz * dz;
-      if (d2 > 9e6 || d2 < 1e-6) continue;
+      // nothing within 25 km: that is a docked vehicle or a co-moving object whose own (older) elements put it a few
+      // km off, which would blow up as a giant white disc from the inverse-square law
+      if (d2 > 9e6 || d2 < 625) continue;
       const rg = Math.sqrt(d2), r = [T.pos[i * 3], T.pos[i * 3 + 1], T.pos[i * 3 + 2]];
       sunlight(r, s, s.dist, L); const Lv = 0.2126 * L[0] + 0.7152 * L[1] + 0.0722 * L[2]; if (Lv < 1e-3) continue;
       // hidden behind the Earth?
@@ -230,7 +232,7 @@ export class SpaceView {
       if (disc > 0 && -b - Math.sqrt(disc) > 0 && -b - Math.sqrt(disc) < rg) continue;
       const cphi = -(ux * s[0] + uy * s[1] + uz * s[2]), phi = Math.acos(clamp(cphi, -1, 1));
       const std = T.std[i];
-      M[k] = std + 5 * Math.log10(rg / 1000) - 2.5 * Math.log10(Math.max(spherePhase(phi) * Lv, 1e-6));
+      M[k] = Math.max(-4.5, std + 5 * Math.log10(rg / 1000) - 2.5 * Math.log10(Math.max(spherePhase(phi) * Lv, 1e-6)));   // never brighter than Venus
       P[k * 3] = ux; P[k * 3 + 1] = uy; P[k * 3 + 2] = uz; C[k * 3] = L[0] / Lv; C[k * 3 + 1] = L[1] / Lv; C[k * 3 + 2] = L[2] / Lv; k++;
     }
     g.setDrawRange(0, k); g.attributes.position.needsUpdate = true; g.attributes.mag.needsUpdate = true; g.attributes.color.needsUpdate = true;

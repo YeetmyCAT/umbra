@@ -38,9 +38,9 @@ input { font: inherit; color: inherit; }
 .cName { font-weight: 650; font-size: 16px; color: var(--acc); }
 .cSub { color: var(--tx2); font-size: 12px; }
 .x { font-size: 22px; line-height: 1; padding: 0 4px; color: var(--tx2); }
-.cLive { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 10px; margin: 8px 0; font-variant-numeric: tabular-nums; }
+.cLive { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px 10px; margin: 8px 0; font-variant-numeric: tabular-nums; }
 .cLive div { font-size: 12px; color: var(--tx2); }
-.cLive b { display: block; color: var(--tx); font-size: 14px; font-weight: 600; }
+.cLive b { display: block; color: var(--tx); font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cBtns { display: flex; gap: 6px; flex-wrap: wrap; }
 .btn { background: rgba(124, 196, 255, 0.12); border: 1px solid rgba(124, 196, 255, 0.25); border-radius: 10px; padding: 6px 10px; font-size: 13px; }
 .btn.on { background: rgba(255, 198, 90, 0.2); border-color: var(--acc); color: var(--acc); }
@@ -94,7 +94,6 @@ input { font: inherit; color: inherit; }
   .chip { font-size: 12.5px; padding: 5px 10px; }
   #panel { left: 8px; width: auto; top: calc(var(--st) + 92px); }
   #card { bottom: calc(var(--sb) + 64px); }
-  .cLive { grid-template-columns: repeat(3, 1fr); }
 }
 @media (max-width: 420px) {
   #bar { padding-left: calc(var(--sl) + 6px); padding-right: calc(var(--sr) + 6px); }
@@ -114,4 +113,14 @@ input { font: inherit; color: inherit; }
 #card.mini .cSub { display: none; }
 #card.mini .cLive { margin: 4px 0 0; }
 #card.mini .cLive b { font-size: 13px; }
-@media (max-width: 640px) { #card.mini { width: auto; max-width: calc(100vw - 16px); } }
+@media (max-width: 640px) { #card.mini { width: min(300px, calc(100vw - 16px)); } }
+
+/* phone: the place, time and view buttons keep one fixed layout (place on its own row, time and views below), and the
+   time uses fixed-width digits, so nothing jumps between rows as the text changes */
+#timeTxt { font-variant-numeric: tabular-nums; }
+@media (max-width: 640px) {
+  #top { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+  #placeBtn { grid-column: 1 / -1; justify-self: start; max-width: 100%; }
+  #timeBtn { justify-self: start; max-width: 100%; min-width: 0; }
+  #modeSeg { justify-self: end; }
+}

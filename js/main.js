@@ -183,9 +183,9 @@ function select(i, center) {
 function lockBtn() { const b = $('bLock'); if (!b) return; b.classList.toggle('on', !!app.ground.lock); b.textContent = app.ground.lock ? 'Untrack' : 'Track'; }
 function sunState(d) {
   const L = d.Lc || [1, 1, 1];
-  if (d.lit <= 0) return d.es > 0.003 ? "Earth's shadow (faint earthshine)" : "In Earth's shadow";
+  if (d.lit <= 0) return d.es > 0.003 ? 'Shadow, earthlit' : 'In shadow';
   if (d.lit < 0.995) return `Penumbra ${(d.lit * 100).toFixed(0)} %`;
-  if (L[2] < 0.75 * L[0]) return 'Sunlit, reddened (sunrise/sunset on it)';
+  if (L[2] < 0.75 * L[0]) return 'Sunlit, red';
   return 'Sunlit';
 }
 function updateCard(ms) {

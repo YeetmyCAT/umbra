@@ -256,7 +256,7 @@ export class GroundView {
     r.setRenderTarget(app.post.rt); r.setClearColor(0, 1); r.clear();
     r.render(this.scene, cam);
     // the model is cut off exactly at the horizon (the ground is in front of anything below it)
-    if (this.model && this.model.visible) { r.clearDepth(); r.clippingPlanes = [this.hzPlane || (this.hzPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0))]; r.render(this.mScene, this.mCam); r.clippingPlanes = []; }
+    if (this.model && this.model.visible) { r.clearDepth(); (this.hzPlane || (this.hzPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0))).constant = this.hzC || 0; r.clippingPlanes = [this.hzPlane]; r.render(this.mScene, this.mCam); r.clippingPlanes = []; }
     {
       // sun star: strength follows the fraction of the (refracted) disc above the horizon, gone below it and when
       // zoomed in far (the disc itself then fills the view)
@@ -354,6 +354,10 @@ export class GroundView {
     const A = new THREE.Matrix4().set(kz, 0, 0, (1 - kz) * cN.x, 0, kz, 0, (1 - kz) * cN.y, 0, 0, 1, 0, 0, 0, 0, 1);
     this.mCam.projectionMatrix.premultiply(A); this.mCam.projectionMatrixInverse.copy(this.mCam.projectionMatrix).invert();
     this.mCam.position.set(0, 0, 0); this.mCam.updateMatrixWorld();
+    // horizon cut: a model point P (metres, D from this camera) really sits at dir*Rm + (P - dir*D), so it is above the
+    // (apparent) horizon when P.y > dir.y*(D - Rm). A plane through the eye would cut it ~1 deg too high (it is drawn
+    // magnified 1/kz about its centre), which showed as a line through a satellite still above the ground.
+    this.hzC = dir.y * (Rm - D);
     // the model stays opaque (no transparency sorting between its parts); the point of light fades out instead
   }
   extinctionRGB(alt) { const s = Math.sin(Math.max(alt, 0) * DEG), X = Math.min(40, 1 / (s + 0.025 * Math.exp(-11 * s))); return [0.1, 0.17, 0.33].map(t => Math.exp(-(t + 0.1) * X)); }

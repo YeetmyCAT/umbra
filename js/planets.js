@@ -111,7 +111,8 @@ export class PlanetDiscs {
                 op *= 0.85 + 0.15*sin(rn*90.0);
                 // planet shadow on the rings
                 float bb = dot(pr, Ls), cc = dot(pr, pr) - 1.0, dd = bb*bb - cc; bool shadowed = dd > 0.0 && -bb + sqrt(dd) > 0.0 && -bb - sqrt(dd) > -1e-3 && bb < 0.0;
-                float lit = shadowed ? 0.03 : abs(dot(Ls, Pz))*2.0 + 0.1;
+                // no sunlight at all in the shadow (Saturn's night side faces it, no light source to fill it)
+                float lit = shadowed ? 0.0 : abs(dot(Ls, Pz))*2.0 + 0.1;
                 col = mix(col, vec3(1.05, 0.98, 0.85)*lit, op);
               }
             }
