@@ -44,7 +44,7 @@ ref = np.asarray(Image.open(os.path.join(ROOT, '.raw', 'before-earthtex', 'earth
 nm = Image.open(os.path.join(SRC, 'Earth-Night-Map-16k.png')).convert('RGB')
 for suf, size in SIZES.items():
     a = np.asarray(nm.resize(size, Image.BOX)).astype(np.float32)
-    f = np.clip(a[:, :, 0] - 0.9 * a[:, :, 2], 0, None)
+    f = np.clip(a[:, :, 0] - 0.6 * np.clip(a[:, :, 2] - a[:, :, 0], 0, None), 0, None)   # white (saturated) cores stay brightest; bluish moonlit land drops out
     small = np.asarray(Image.fromarray(f, 'F').resize(ref.shape[::-1], Image.BOX))
     qs = np.linspace(0, 100, 1001)
     sq = np.maximum.accumulate(np.percentile(small, qs) + np.arange(len(qs)) * 1e-6)

@@ -140,9 +140,9 @@ export function makeEarth() {
           vec2 ah = sph(o, d, R + 320.0), al = sph(o, d, R + 95.0);
           float a0 = max(ah.x, 0.0), a1 = ah.y; if (ground) a1 = min(a1, al.x > 0.0 ? al.x : a1);
           if (a1 > a0 && ah.x < 1e8) {
-            float dt = (a1 - a0)/12.0;
-            for (int i = 0; i < 12; i++) {
-              vec3 p = o + d*(a0 + (float(i) + hash(gl_FragCoord.xy + float(i)))*dt); float h = length(p) - R;
+            float dt = (a1 - a0)/24.0;
+            for (int i = 0; i < 24; i++) {
+              vec3 p = o + d*(a0 + (float(i) + 0.5)*dt); float h = length(p) - R;
               if (h < 95.0) continue;
               vec3 n = normalize(p); float night = smoothstep(0.05, -0.15, dot(n, uSun));
               if (night <= 0.0) continue;
@@ -171,7 +171,7 @@ export function makeEarth() {
         // seen as a thin band along the night limb; weak gravity-wave banding. Volume emission integrated along the ray.
         vec3 ag = vec3(0.0);
         {
-          float jit = hash(gl_FragCoord.xy + 7.0);
+          float jit = 0.5;   // evenly spaced samples: a per-pixel random offset showed as a fixed grain
           // green: only where the ray is inside the 80-112 km shell (one or two segments)
           vec2 so = sph(o, d, R + 112.0), si = sph(o, d, R + 80.0);
           if (so.x < 1e8 && so.y > 0.0) {
@@ -208,13 +208,17 @@ export function makeEarth() {
           vec3 aux = textureGrad(uAux, uv, gx, gy).rgb;
           float water = smoothstep(0.35, 0.75, aux.g);
           // open water: one deep-ocean colour, not the day map's sea-floor relief (the real ocean surface doesn't show it)
-          alb = mix(alb, vec3(0.006, 0.016, 0.045), water);
+          // open water: a realistic deep-ocean colour, plus whatever colour the map shows beyond its flat deep-sea navy
+          // (shallows, green algae, brown sediment); the shine is added on top unchanged
+          alb = mix(alb, vec3(0.006, 0.016, 0.045) + max(alb - vec3(0.0010, 0.0008, 0.0263), 0.0)*0.5, water);
           float mus = dot(n, uSun), mum = dot(n, uMoon), muv = max(dot(n, -d), 0.02);
           vec3 Tsun = sunTS(p + n*0.05), Tmoon = sunT(p + n*0.05, uMoon);
           // clouds: a thin layer ~8 km up; their shadows fall where the sunward ray crosses the layer
           vec3 pc = o + d*max(sph(o, d, R + 8.0).x, 0.0); vec2 uvc = llUV(normalize(pc));
           float cl = smoothstep(0.18, 0.75, textureGrad(uAux, uvc, gx, gy).r);
           vec3 ps = p + uSun*(8.0/max(mus, 0.08)); float sh = smoothstep(0.18, 0.75, texture(uAux, llUV(normalize(ps))).r);
+          // moonlight casts its own cloud shadows, toward the Moon's direction (using the Sun's put them in the wrong place)
+          vec3 pm = p + uMoon*(8.0/max(mum, 0.08)); float shM = smoothstep(0.18, 0.75, texture(uAux, llUV(normalize(pm))).r);
           vec3 Edir = uSunE*Tsun*max(mus, 0.0) + mE*Tmoon*max(mum, 0.0);
           // the land's own slopes (from the height map, true scale) shade it; clouds, sea and glint keep the smooth sphere
           vec3 nG = n;
@@ -225,10 +229,10 @@ export function makeEarth() {
             nG = normalize(n - ea*(he - hw)*HTM/(2.0*dx) - no*(hn - hs)*HTM/(2.0*dx));
             nG = normalize(mix(nG, n, water));
           }
-          vec3 EdirG = uSunE*Tsun*max(dot(nG, uSun), 0.0) + mE*Tmoon*max(dot(nG, uMoon), 0.0);
+          vec3 EdirG = uSunE*Tsun*max(dot(nG, uSun), 0.0)*(1.0 - 0.65*sh) + mE*Tmoon*max(dot(nG, uMoon), 0.0)*(1.0 - 0.65*shM);
           float sv = solarVis(p + n*0.05);   // skylight follows the eclipse too
           vec3 sky = (uSunE*smoothstep(-0.2, 0.3, mus)*vec3(0.12, 0.16, 0.25)*min(sv, 1.0)*(mus < 0.0 ? pow(10.0, 0.4*asin(mus)*57.29578) : 1.0) + mE*smoothstep(-0.2, 0.3, mum)*vec3(0.12, 0.16, 0.25))*0.25;   // skylight
-          vec3 surf = alb/PI*(EdirG*(1.0 - 0.65*sh) + sky);
+          vec3 surf = alb/PI*(EdirG + sky);
           // ocean: darker, with the Sun's glint spread by wave slopes (Cox-Munk, ~6 m/s wind)
           if (water > 0.01) {
             vec3 hv = normalize(uSun - d); float nh = max(dot(n, hv), 1e-3), tan2 = (1.0 - nh*nh)/(nh*nh);
@@ -248,7 +252,12 @@ export function makeEarth() {
           vec3 lights = vec3(lt)*vec3(1.0, 0.76, 0.45)*1.2*smoothstep(0.08, -0.12, mus);
           // a cloud deck over a city glows: the light is scattered through it into a soft patch ~40 km across with
           // the rough shape of the city and none of its streets (about half the light comes out of the top)
-          float lw = textureLod(uNight, uv, log2(float(textureSize(uNight, 0).x)/1024.0)).r;
+          float lw = 0.0;
+          {
+            float lv = log2(float(textureSize(uNight, 0).x)/1024.0); vec2 st = vec2(1.0/1024.0, 1.0/512.0);
+            lw = textureLod(uNight, uv, lv).r*0.2;
+            for (int k = 0; k < 12; k++) { float a = float(k)*0.5236, r = k < 6 ? 0.9 : 1.8; lw += textureLod(uNight, uv + vec2(cos(a), sin(a))*st*r, lv + 0.5).r*(k < 6 ? 0.08 : 0.053); }
+          }
           vec3 cityGlow = vec3(lw*lw)*vec3(1.0, 0.76, 0.45)*1.2*0.5*smoothstep(0.08, -0.12, mus);
           vec3 cloudCol = vec3(0.78)/PI*(Edir + sky*1.5) + cityGlow;
           surf = mix(surf, cloudCol, cl) + lights*pow(1.0 - cl, 3.0);   // streets vanish under a thick cloud, only the glow is left

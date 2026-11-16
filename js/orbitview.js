@@ -114,7 +114,9 @@ export class OrbitView {
     const g = this.pts.geometry, P = g.attributes.position.array, Lt = g.attributes.lit.array, S = g.attributes.show.array, f = app.filter;
     for (let i = 0; i < T.N; i++) {
       P[i * 3] = T.pos[i * 3]; P[i * 3 + 1] = T.pos[i * 3 + 1]; P[i * 3 + 2] = T.pos[i * 3 + 2];
-      Lt[i] = T.litAll ? T.litAll[i] : 1; S[i] = f && !f(i) ? 0 : 1;
+      // decayed (orbit no longer computable) or below 78 km: burned up, not shown (it used to sit frozen in place)
+      const gone = (T.seg && !T.seg.ok[i]) || P[i * 3] * P[i * 3] + P[i * 3 + 1] * P[i * 3 + 1] + P[i * 3 + 2] * P[i * 3 + 2] < 6449 * 6449;
+      Lt[i] = T.litAll ? T.litAll[i] : 1; S[i] = gone || (f && !f(i)) ? 0 : 1;
     }
     g.attributes.position.needsUpdate = true; g.attributes.lit.needsUpdate = true; g.attributes.show.needsUpdate = true;
     this.ptsU.uCam.value.copy(cam.position); this.ptsU.uSize.value = clamp(2.2 * dpr * Math.sqrt(42000 / this.dist), 1.5 * dpr, 6 * dpr);

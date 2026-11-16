@@ -84,8 +84,15 @@ export class SpaceView {
     if (i < 0) return false;
     // exact state of the satellite
     const st = new Float64Array(6);
-    if (!T.selRec || !T.selState(ms, st)) return false;
+    // re-entry: SGP4 stops once the orbit has decayed. Keep the last good state, show the satellite burning up (orange
+    // plasma from ~120 km) and gone below 78 km, where re-entering debris typically breaks up and burns away
+    const okState = !!(T.selRec && T.selState(ms, st));
+    if (okState) { this.lastSt = st.slice(); this.lastSel = i; }
+    else if (this.lastSel === i && this.lastSt) st.set(this.lastSt);
+    else return false;
     const r = [st[0], st[1], st[2]], v = [st[3], st[4], st[5]];
+    const hKm = Math.hypot(r[0], r[1], r[2]) - 6371;
+    this.gone = !okState || hKm < 78; this.burn = this.gone ? 0 : Math.min(1, Math.max(0, (120 - hKm) / 42));
     const rv = new THREE.Vector3(...r), up = rv.clone().normalize(), vel = new THREE.Vector3(...v);
     const fwd = vel.clone().addScaledVector(up, -vel.dot(up)).normalize(), right = fwd.clone().cross(up);
     // precise Sun and Moon (astronomy-engine): eclipses and the Moon's shadow on the Earth fall in the right place
@@ -100,6 +107,7 @@ export class SpaceView {
       const sc = this.sunL.shadow.camera, z = this.shape.size * 0.6; sc.left = sc.bottom = -z; sc.right = sc.top = z; sc.near = 0.1; sc.far = this.shape.size * 4; sc.updateProjectionMatrix();
       this.sunL.shadow.normalBias = this.shape.size / 2048 * 2.5;
     }
+    this.model.visible = !this.gone;
     const B = bodyFrame(this.shape.att, r, v, s, ms, T.objs[i].id);
     this.model.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3(...B.x), new THREE.Vector3(...B.y), new THREE.Vector3(...B.z)));
     this.model.position.set(0, 0, 0);
@@ -177,6 +185,19 @@ export class SpaceView {
     this.sunL.color.setRGB(L[0] / Math.max(Lv, 1e-6), L[1] / Math.max(Lv, 1e-6), L[2] / Math.max(Lv, 1e-6)); this.sunL.intensity = 1.27e5 * Lv * Ex * open1;
     this.esL.position.copy(up).multiplyScalar(-this.shape.size * 2); this.esL.target.position.set(0, 0, 0); this.esL.intensity = 1.27e5 * es * Ex * 0.8;
     this.amb.intensity = 1.27e5 * Ex * (es * 0.15 + 2e-8);
+    {   // re-entry plasma: an orange glow around the body, growing as it sinks into denser air
+      if (!this.plasma) {
+        const c = document.createElement('canvas'); c.width = c.height = 256; const g2 = c.getContext('2d'), gr = g2.createRadialGradient(128, 128, 0, 128, 128, 128);
+        for (let k = 0; k <= 16; k++) { const x = k / 16; gr.addColorStop(x, `rgba(255,255,255,${Math.exp(-x * x * 9) * (1 - x)})`); } g2.fillStyle = gr; g2.fillRect(0, 0, 256, 256);
+        this.plasma = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+        this.mScene.add(this.plasma);
+      }
+      const pf = this.burn || 0; this.plasma.visible = pf > 0.001;
+      if (this.plasma.visible) {
+        if (this.plasmaFor !== this.model) { this.plasmaFor = this.model; const bs = new THREE.Box3().setFromObject(this.model).getBoundingSphere(new THREE.Sphere()); this.plasmaR = bs.radius || this.shape.size * 0.5; }
+        const L = 3.0 * pf * pf; this.plasma.material.color.setRGB(1.0 * L, 0.45 * L, 0.12 * L); this.plasma.scale.setScalar(this.plasmaR * (2.2 + 1.2 * pf)); this.plasma.position.set(0, 0, 0);
+      }
+    }
     // other satellites near this one (within 3000 km), with their brightness as seen from here
     this.updateOthers(ms, rv, sun, s);
     // render
@@ -254,6 +275,7 @@ export class SpaceView {
   }
   drawOverlay(w, h, ms, r, v, up, skyCam) {
     const ov = this.app.overlay, g = ov.ctx; ov.begin(w, h);
+    if (this.gone) { g.font = '600 16px system-ui, sans-serif'; g.textAlign = 'center'; g.fillStyle = 'rgba(255,190,120,0.95)'; g.fillText('Burned up on reentry', w / 2, h * 0.42); g.textAlign = 'left'; }
     // ground track direction marker: nadir point label and the terminator note
     const alt = Math.hypot(...r) - 6371, spd = Math.hypot(...v);
     g.font = '12px system-ui, sans-serif'; g.fillStyle = 'rgba(200,220,255,0.85)'; g.textAlign = 'left';
