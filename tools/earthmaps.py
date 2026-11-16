@@ -70,16 +70,12 @@ print('aux...')
 aux = np.asarray(Image.open(D('earth-aux.jpg')).convert('RGB')).astype(np.float32)
 clouds, third = up(aux[:, :, 0]), up(aux[:, :, 2])
 g = up(aux[:, :, 1], Image.BILINEAR)             # current mask, smooth
-band = (g > 25) & (g < 230)                      # only the coastline zone is redrawn
+band = (g > 5) & (g < 250)                        # only the coastline zone is redrawn
 wat, lan = (g >= 230).astype(np.float32), (g <= 25).astype(np.float32)
-R = 6                                            # local neighbourhood (~30 km) for the sea and land colours
-nw, nl = blur(wat, R) + 1e-3, blur(lan, R) + 1e-3
-cw = blur(src * wat[:, :, None], R) / nw[:, :, None]
-cl = blur(src * lan[:, :, None], R) / nl[:, :, None]
-dw = np.sqrt(((src - cw) ** 2).sum(2)); dl = np.sqrt(((src - cl) ** 2).sum(2))
-soft = np.clip(0.5 + (dl - dw) / (dl + dw + 1e-3) * 2.5, 0, 1) * 255   # 1 = water
-ok = band & (nw > 0.02) & (nl > 0.02)            # both sides known nearby; elsewhere keep the current mask
-gnew = np.where(ok, soft, g)
+# within that zone, NASA's own water colouring decides: water (deep or shallow) is blue or cyan, land never is
+r_, g_, b_ = src[:, :, 0], src[:, :, 1], src[:, :, 2]
+soft = np.clip(((b_ - r_) - 6.0) / 8.0, 0, 1) * np.clip(((b_ - g_) + 14.0) / 8.0, 0, 1) * 255   # 1 = water
+gnew = np.where(band, soft, g)
 def aa(a):   # light [1 2 1] smoothing, so the new coastline is anti-aliased but still one pixel sharp
     a = (np.roll(a, 1, 0) + 2 * a + np.roll(a, -1, 0)) / 4
     return (np.roll(a, 1, 1) + 2 * a + np.roll(a, -1, 1)) / 4

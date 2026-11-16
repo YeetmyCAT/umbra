@@ -229,8 +229,12 @@ export function makeEarth() {
           // a soft glow around towns (light scattered in the air), instead of a grainy pattern
           lt = 0.8*lt + 0.2*pow(textureGrad(uNight, uv, gx*6.0, gy*6.0).r, 2.0);
           vec3 lights = vec3(lt)*vec3(1.0, 0.76, 0.45)*1.2*smoothstep(0.08, -0.12, mus);
-          vec3 cloudCol = vec3(0.78)/PI*(Edir + sky*1.5) + lights*0.12;
-          surf = mix(surf + lights, cloudCol, cl);
+          // a cloud deck over a city glows: the light is scattered through it into a soft patch ~40 km across with
+          // the rough shape of the city and none of its streets (about half the light comes out of the top)
+          float lw = textureLod(uNight, uv, log2(float(textureSize(uNight, 0).x)/1024.0)).r;
+          vec3 cityGlow = vec3(lw*lw)*vec3(1.0, 0.76, 0.45)*1.2*0.5*smoothstep(0.08, -0.12, mus);
+          vec3 cloudCol = vec3(0.78)/PI*(Edir + sky*1.5) + cityGlow;
+          surf = mix(surf, cloudCol, cl) + lights*pow(1.0 - cl, 3.0);   // streets vanish under a thick cloud, only the glow is left
           col = Ls + aur + ag + T*surf*surfW;
           alpha = 1.0;
         }
