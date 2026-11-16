@@ -21,7 +21,7 @@ export function makeEarth() {
   const tex = (f, srgb) => { f = big ? f.replace('.jpg', '-8k.jpg') : f; if (TEX[f]) return TEX[f]; const t = L.load(f); t.colorSpace = THREE.NoColorSpace; t.wrapS = THREE.RepeatWrapping; t.anisotropy = 8; t.minFilter = THREE.LinearMipmapLinearFilter; return (TEX[f] = t); };
   const aur = new THREE.DataTexture(new Uint8Array(360 * 181), 360, 181, THREE.RedFormat); aur.wrapS = THREE.RepeatWrapping; aur.magFilter = aur.minFilter = THREE.LinearFilter; aur.needsUpdate = true;
   const U = {
-    uDay: { value: tex('data/earth-day.jpg') }, uNight: { value: tex('data/earth-lights.jpg') }, uAux: { value: tex('data/earth-aux.jpg') },
+    uDay: { value: tex('data/earth-day.jpg') }, uNight: { value: tex('data/earth-lights.jpg') }, uAux: { value: tex('data/earth-aux.jpg') }, uHgt: { value: tex('data/earth-height.png') },
     uAur: { value: aur }, uAurOn: { value: 1 }, uKp: { value: 3 }, uMagAxis: { value: new THREE.Vector3(0, 0, 1) },
     uCam: { value: new THREE.Vector3() }, uInvPV: { value: new THREE.Matrix4() }, uSun: { value: new THREE.Vector3(1, 0, 0) }, uMoon: { value: new THREE.Vector3(0, 1, 0) },
     uSunE: { value: 1.27e5 }, uMoonE: { value: 0.1 }, uMoonTint: { value: new THREE.Vector3(1, 1, 1) }, uMoonP: { value: new THREE.Vector3(0, 384000, 0) }, uSunDist: { value: 1.496e8 }, uEclOn: { value: 0 }, uG: { value: 0 }, uExposure: { value: 1e-4 }, uTime: { value: 0 }, uSteps: { value: 14 },
@@ -35,7 +35,7 @@ export function makeEarth() {
       precision highp float;
       #define PI 3.14159265
       in vec3 vRay;
-      uniform sampler2D uDay, uNight, uAux, uAur; uniform float uAurOn, uKp; uniform vec3 uMagAxis;
+      uniform sampler2D uDay, uNight, uAux, uAur, uHgt; uniform float uAurOn, uKp; uniform vec3 uMagAxis;
       uniform vec3 uCam, uSun, uMoon, uMoonTint, uMoonP; uniform float uSunE, uMoonE, uG, uExposure, uTime, uSteps, uSunDist, uEclOn;
       vec3 mE;   // moonlight (lux), dimmed and faintly reddened during a lunar eclipse
       const float R = 6371.0, RT = 6471.0, HR = 8.0, HM = 1.2;
@@ -76,6 +76,7 @@ export function makeEarth() {
         return clamp(1.0 - (a1 + r2*r2*a2 - 0.5*k)/PI, 0.0, 1.0);
       }
       vec3 sunTS(vec3 p){ return sunT(p, uSun)*solarVis(p); }
+      const float HTM = 6.35;   // km at height-map value 1.0 (24.9 m per grey level, checked against known summits)
       vec2 llUV(vec3 n){   // TEME surface normal -> texture uv (rotating Earth)
         float c = cos(uG), s = sin(uG);
         vec3 e = vec3(c*n.x + s*n.y, -s*n.x + c*n.y, n.z);
@@ -92,6 +93,12 @@ export function makeEarth() {
         mE = uMoonE*uMoonTint;
         vec2 ta = sph(o, d, RT), tg = sph(o, d, R);
         bool ground = tg.x > 0.0 && tg.x < 1e8;
+        // terrain: the ground is at its real height (height map: 0 = sea level, 1 = 6.35 km, true scale), found by a
+        // few steps along the ray; the air path and the sunlight then end at the real ground
+        if (ground) for (int k = 0; k < 3; k++) {
+          float hh = textureLod(uHgt, llUV(normalize(o + d*tg.x)), 1.0).r*HTM;
+          vec2 tt = sph(o, d, R + hh); if (tt.x > 0.0 && tt.x < 1e8) tg.x = tt.x;
+        }
         if (ta.y <= 0.0 || ta.x > 1e8) { gl_FragColor = vec4(0.0); return; }
         float t0 = max(ta.x, 0.0), t1 = ground ? tg.x : ta.y;
         float cs = dot(d, uSun), cmn = dot(d, uMoon);
@@ -209,9 +216,19 @@ export function makeEarth() {
           float cl = smoothstep(0.18, 0.75, textureGrad(uAux, uvc, gx, gy).r);
           vec3 ps = p + uSun*(8.0/max(mus, 0.08)); float sh = smoothstep(0.18, 0.75, texture(uAux, llUV(normalize(ps))).r);
           vec3 Edir = uSunE*Tsun*max(mus, 0.0) + mE*Tmoon*max(mum, 0.0);
+          // the land's own slopes (from the height map, true scale) shade it; clouds, sea and glint keep the smooth sphere
+          vec3 nG = n;
+          {
+            vec3 ea = normalize(cross(vec3(0.0, 0.0, 1.0), n)), no = cross(n, ea); float dx = 10.0;
+            float he = textureGrad(uHgt, llUV(normalize(p + ea*dx)), gx, gy).r, hw = textureGrad(uHgt, llUV(normalize(p - ea*dx)), gx, gy).r;
+            float hn = textureGrad(uHgt, llUV(normalize(p + no*dx)), gx, gy).r, hs = textureGrad(uHgt, llUV(normalize(p - no*dx)), gx, gy).r;
+            nG = normalize(n - ea*(he - hw)*HTM/(2.0*dx) - no*(hn - hs)*HTM/(2.0*dx));
+            nG = normalize(mix(nG, n, water));
+          }
+          vec3 EdirG = uSunE*Tsun*max(dot(nG, uSun), 0.0) + mE*Tmoon*max(dot(nG, uMoon), 0.0);
           float sv = solarVis(p + n*0.05);   // skylight follows the eclipse too
           vec3 sky = (uSunE*smoothstep(-0.2, 0.3, mus)*vec3(0.12, 0.16, 0.25)*min(sv, 1.0)*(mus < 0.0 ? pow(10.0, 0.4*asin(mus)*57.29578) : 1.0) + mE*smoothstep(-0.2, 0.3, mum)*vec3(0.12, 0.16, 0.25))*0.25;   // skylight
-          vec3 surf = alb/PI*(Edir*(1.0 - 0.65*sh) + sky);
+          vec3 surf = alb/PI*(EdirG*(1.0 - 0.65*sh) + sky);
           // ocean: darker, with the Sun's glint spread by wave slopes (Cox-Munk, ~6 m/s wind)
           if (water > 0.01) {
             vec3 hv = normalize(uSun - d); float nh = max(dot(n, hv), 1e-3), tan2 = (1.0 - nh*nh)/(nh*nh);
