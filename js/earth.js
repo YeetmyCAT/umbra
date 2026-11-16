@@ -58,6 +58,15 @@ export function makeEarth() {
         float x0 = sqrt(1.0 - mu*mu)*(X + h), c0 = sqrt(x0);
         return 2.0*c0*exp(X - x0) - c/(1.0 - c*mu)*exp(-h);
       }
+      // ozone (Chappuis band) and stratospheric haze seen edge-on: about half the light is lost along a ray skimming
+      // the limb 25 km up (an exponential layer, 6 km scale height), most in green and orange
+      const vec3 LIMBX = vec3(0.063, 0.079, 0.040);
+      // optical depth (per colour) of the air from point p along unit d out to space (Rayleigh, haze, ozone)
+      vec3 tauOut(vec3 p, vec3 d){
+        float r = length(p), h = max(r - R, 0.0), mu = dot(p, d)/r, ht = mu < 0.0 ? max(r*sqrt(1.0 - mu*mu) - R, 0.0) : h;
+        float cr = chap(R/HR, h/HR, mu)*HR, cm = chap(R/HM, h/HM, mu)*HM;
+        return bR*cr + vec3(bMe)*cm + bO*cr*(0.35*exp(-abs(ht - 25.0)/30.0) + 0.1) + LIMBX*chap(R/6.0, h/6.0, mu)*6.0;
+      }
       // sunlight transmittance at point p (km) toward unit l, zero in the Earth's shadow (soft edge ~ the Sun's disc)
       vec3 sunT(vec3 p, vec3 l){
         float r = length(p), mu = dot(p, l)/r, h = r - R;
@@ -118,7 +127,11 @@ export function makeEarth() {
         // rays skimming the limb cross a very long, dense path: more samples there, or the glow shows a thin separate
         // arc as if seen through the Earth
         float thR = length(o + d*max(-dot(o, d), 0.0)) - R;   // closest approach to the surface (negative: hits it)
-        if (inAir && thR > -40.0 && uSteps > 9.0) N = 64;   // every ray through the air above the limb: no switch point to show as a line
+        if (inAir && thR > -40.0 && uSteps > 9.0) N = 64;
+        // light emitted along this ray (airglow, aurora) reaches the camera through the air in between: from beyond the
+        // tangent point of a ray just above the limb it crosses the dense low air and is dimmed and reddened, most at
+        // the bottom of the band, hardly at all a few tens of km up (rays that hit the Earth are left as they are)
+        vec3 tau0 = ground ? vec3(0.0) : tauOut(o, d);   // every ray through the air above the limb: no switch point to show as a line
         // right at the limb a grazing ray also sees the air beyond the tangent point, while a ray just below it stops at
         // the surface: both of those are seen through ~70 air masses (negligible), so they fade out over the last 8 km
         // on either side and the two kinds of ray meet without a coloured line
@@ -171,7 +184,8 @@ export function makeEarth() {
               float rays = 0.6 + 0.8*smoothstep(0.35, 0.8, vn(vec2(mlon*340.0 - uTime*0.01, h*0.01)));
               float green = smoothstep(95.0, 108.0, h)*exp(-max(h - 110.0, 0.0)/45.0), red = exp(-pow((h - 240.0)/60.0, 2.0))*(0.08 + 0.3*smoothstep(4.0, 7.0, uKp));
               float kR = 0.6*pow(pr*10.0, 1.9)*(1.0 + max(uKp - 5.0, 0.0)*0.6);
-              aur += (vec3(0.15, 1.0, 0.35)*green + vec3(1.0, 0.18, 0.3)*red)*kR*curtain*rays*night*dt/40.0;
+              vec3 Tv = ground ? vec3(1.0) : exp(-max(tau0 - tauOut(p, d), 0.0));
+              aur += (vec3(0.15, 1.0, 0.35)*green + vec3(1.0, 0.18, 0.3)*red)*kR*curtain*rays*night*dt/40.0*Tv;
             }
             aur *= 1.9e-4;
           }
@@ -197,7 +211,8 @@ export function makeEarth() {
                 float ta = s0 + float(i)*dt; vec3 p = o + d*(ta + 0.5*dt);
                 vec3 e = ecef(normalize(p));
                 float wav = 0.85 + 0.3*vn(vec2(atan(e.y, e.x)*180.0 + uTime*0.0004, asin(e.z)*90.0));
-                ag += vec3(0.45, 1.0, 0.35)*layerStep(length(o + d*ta) - R, length(o + d*(ta + dt)) - R, 95.0, 4.5, dt)*(0.25/8.0)*wav;   // ~250 R overhead
+                vec3 Tv = ground ? vec3(1.0) : exp(-max(tau0 - tauOut(p, d), 0.0));
+                ag += vec3(0.45, 1.0, 0.35)*layerStep(length(o + d*ta) - R, length(o + d*(ta + dt)) - R, 95.0, 4.5, dt)*(0.25/8.0)*wav*Tv;   // ~250 R overhead
               }
             }
           }
@@ -205,13 +220,11 @@ export function makeEarth() {
           vec2 sr = sph(o, d, R + 330.0);
           if (sr.x < 1e8 && sr.y > 0.0) {
             float r0 = max(sr.x, 0.0), r1 = ground ? tg.x : sr.y, dt = (r1 - r0)/16.0;
-            for (int i = 0; i < 16; i++) { float ta = r0 + float(i)*dt; ag += vec3(1.0, 0.22, 0.18)*layerStep(length(o + d*ta) - R, length(o + d*(ta + dt)) - R, 250.0, 45.0, dt)*(0.06/80.0); }
+            for (int i = 0; i < 16; i++) { float ta = r0 + float(i)*dt; vec3 Tv = ground ? vec3(1.0) : exp(-max(tau0 - tauOut(o + d*(ta + 0.5*dt), d), 0.0)); ag += vec3(1.0, 0.22, 0.18)*layerStep(length(o + d*ta) - R, length(o + d*(ta + dt)) - R, 250.0, 45.0, dt)*(0.06/80.0)*Tv; }
           }
           // kR -> cd/m^2; seen against the night Earth from orbit it hardly shows, only above the limb (from inside or
           // below the layer it glows the same either side of the horizon, so no edge there)
-          // (rays that only just hit the Earth, within ~60 km of grazing, keep their glow: the band fades into the dark
-          // limb over about a degree instead of stopping at a hard edge)
-          ag *= 1.9e-4 * (ground ? mix(1.0, mix(0.08, 1.0, smoothstep(-60.0, 0.0, thR)), smoothstep(112.0, 200.0, length(o) - R)) : 1.0);
+          ag *= 1.9e-4 * (ground ? mix(1.0, 0.08, smoothstep(112.0, 200.0, length(o) - R)) : 1.0);
         }
         vec3 col = Ls + aur + ag;
         float alpha = 0.0;   // what lies behind is dimmed (and reddened) by the transmittance pass drawn before this one
@@ -307,7 +320,7 @@ export function makeEarth() {
         if (disc > 0.0 && -b - sqrt(disc) > 0.0) { gl_FragColor = vec4(1.0); return; }   // the Earth: drawn over this
         float ht = mu < 0.0 ? max(r*sqrt(1.0 - mu*mu) - R, 0.0) : h;   // lowest point of the ray
         float cr = chap(R/HR, h/HR, mu)*HR, cm = chap(R/HM, h/HM, mu)*HM, co = cr*(0.35*exp(-abs(ht - 25.0)/30.0) + 0.1);
-        gl_FragColor = vec4(exp(-(bR*cr + vec3(bMe)*cm + bO*co)), 1.0);
+        gl_FragColor = vec4(exp(-(bR*cr + vec3(bMe)*cm + bO*co + vec3(0.063, 0.079, 0.040)*chap(R/6.0, h/6.0, mu)*6.0)), 1.0);   // + ozone and stratospheric haze edge-on, as tauOut
       }`,
   });
   const tmesh = new THREE.Mesh(FSQ, tmat); tmesh.frustumCulled = false; tmesh.renderOrder = -1;
