@@ -106,16 +106,19 @@ export function makeEarth() {
           float hh = textureLod(uHgt, llUV(normalize(o + d*tg.x)), 1.0).r*HTM;
           vec2 tt = sph(o, d, R + hh); if (tt.x > 0.0 && tt.x < 1e8) tg.x = tt.x;
         }
-        if (ta.y <= 0.0 || ta.x > 1e8) { gl_FragColor = vec4(0.0); return; }
+        // nothing on this ray only if it misses the whole glowing shell (aurora up to ~330 km), not just the dense air
+        // below 100 km: from above 100 km that cut the airglow off along a hard line
+        { vec2 tE = sph(o, d, R + 330.0); if (tE.y <= 0.0 || tE.x > 1e8) { gl_FragColor = vec4(0.0); return; } }
+        bool inAir = ta.y > 0.0 && ta.x < 1e8;
         float t0 = max(ta.x, 0.0), t1 = ground ? tg.x : ta.y;
         float cs = dot(d, uSun), cmn = dot(d, uMoon);
         // ---- view-ray scattering ----
         vec3 Ls = vec3(0.0), T = vec3(1.0);
-        int N = int(uSteps);
+        int N = inAir ? int(uSteps) : 0;
         // rays skimming the limb cross a very long, dense path: more samples there, or the glow shows a thin separate
         // arc as if seen through the Earth
         float thR = length(o + d*max(-dot(o, d), 0.0)) - R;   // closest approach to the surface (negative: hits it)
-        if (thR > -40.0 && uSteps > 9.0) N = 64;   // every ray through the air above the limb: no switch point to show as a line
+        if (inAir && thR > -40.0 && uSteps > 9.0) N = 64;   // every ray through the air above the limb: no switch point to show as a line
         // right at the limb a grazing ray also sees the air beyond the tangent point, while a ray just below it stops at
         // the surface: both of those are seen through ~70 air masses (negligible), so they fade out over the last 8 km
         // on either side and the two kinds of ray meet without a coloured line
@@ -209,7 +212,7 @@ export function makeEarth() {
           ag *= 1.9e-4 * (ground ? mix(1.0, 0.08, smoothstep(112.0, 200.0, length(o) - R)) : 1.0);
         }
         vec3 col = Ls + aur + ag;
-        float alpha = 1.0 - dot(T, vec3(0.3333));
+        float alpha = 0.0;   // what lies behind is dimmed (and reddened) by the transmittance pass drawn before this one
         if (ground) {
           vec3 p = o + d*tg.x, n = normalize(p);
           vec2 uv = llUV(n);
@@ -279,7 +282,34 @@ export function makeEarth() {
       }`,
   });
   const mesh = new THREE.Mesh(FSQ, mat); mesh.frustumCulled = false;
-  const scene = new THREE.Scene(); scene.add(mesh);
+  // the stars, planets and Milky Way seen through the air: dimmed colour by colour (blue most), so the atmosphere shows
+  // as a dark band along the night limb with the stars in it fading and turning red, Moon or no Moon. Drawn first,
+  // multiplying what is already there by the air's transmittance (the Earth itself is drawn opaque over it).
+  const tmat = new THREE.ShaderMaterial({
+    uniforms: U, depthTest: false, depthWrite: false, transparent: true,
+    blending: THREE.CustomBlending, blendSrc: THREE.ZeroFactor, blendDst: THREE.SrcColorFactor,
+    vertexShader: mat.vertexShader,
+    fragmentShader: `precision highp float; in vec3 vRay; uniform vec3 uCam;
+      const float R = 6371.0, HR = 8.0, HM = 1.2;
+      const vec3 bR = vec3(5.802e-3, 13.558e-3, 33.1e-3), bO = vec3(0.650e-3, 1.881e-3, 0.085e-3);
+      const float bMe = 3.6e-3;
+      float chap(float X, float h, float mu){
+        float c = sqrt(X + h);
+        if (mu >= 0.0) return c/(c*mu + 1.0)*exp(-h);
+        float x0 = sqrt(1.0 - mu*mu)*(X + h), c0 = sqrt(x0);
+        return 2.0*c0*exp(X - x0) - c/(1.0 - c*mu)*exp(-h);
+      }
+      void main(){
+        vec3 d = normalize(vRay), o = uCam; float r = length(o), h = max(r - R, 0.0), mu = dot(o, d)/r;
+        float b = dot(o, d), disc = b*b - dot(o, o) + R*R;
+        if (disc > 0.0 && -b - sqrt(disc) > 0.0) { gl_FragColor = vec4(1.0); return; }   // the Earth: drawn over this
+        float ht = mu < 0.0 ? max(r*sqrt(1.0 - mu*mu) - R, 0.0) : h;   // lowest point of the ray
+        float cr = chap(R/HR, h/HR, mu)*HR, cm = chap(R/HM, h/HM, mu)*HM, co = cr*(0.35*exp(-abs(ht - 25.0)/30.0) + 0.1);
+        gl_FragColor = vec4(exp(-(bR*cr + vec3(bMe)*cm + bO*co)), 1.0);
+      }`,
+  });
+  const tmesh = new THREE.Mesh(FSQ, tmat); tmesh.frustumCulled = false; tmesh.renderOrder = -1;
+  const scene = new THREE.Scene(); scene.add(tmesh, mesh);
   return { U, scene, mesh, setAurora(grid) { const t = U.uAur.value; t.image.data.set(grid); t.needsUpdate = true; } };
 }
 

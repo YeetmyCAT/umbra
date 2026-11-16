@@ -1,8 +1,8 @@
 // Simulation clock shared by every view: real time, paused, or running at any rate (also backwards).
 export const RATES = [-86400, -18000, -3600, -600, -60, -10, -1, -0.25, 0, 0.25, 1, 10, 60, 600, 3600, 18000, 86400];
-// The first satellite (Sputnik 1) flew in October 1957: the clock runs from the start of 1957 to 10 years from today;
-// at either end it stops.
-export const T_MIN = Date.UTC(1957, 0, 1), T_MAX = Date.now() + 10 * 365.25 * 864e5;
+// The clock runs from the start of 1958 (the oldest object still in orbit, Vanguard 1, flew in March 1958) to 10 years
+// from today; at either end it stops.
+export const T_MIN = Date.UTC(1958, 0, 1), T_MAX = Date.now() + 10 * 365.25 * 864e5;
 const lim = ms => Math.max(T_MIN, Math.min(T_MAX, ms));
 export class Clock {
   constructor() { this.base = Date.now(); this.at = performance.now(); this.rate = 1; this.listeners = []; }

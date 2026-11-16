@@ -124,6 +124,7 @@ export class OrbitView {
     if (app.sel >= 0 && !T.gone(app.sel)) { this.selMark.visible = true; this.selMark.position.set(T.pos[app.sel * 3], T.pos[app.sel * 3 + 1], T.pos[app.sel * 3 + 2]); this.selMark.scale.setScalar(sc * 2.2); } else this.selMark.visible = false;
     this.obsMark.position.set(...ecefToTeme(app.obs.pos, gmst(ms))); this.obsMark.scale.setScalar(sc * 1.6);
     if (app.sel !== this.orbitFor || Math.abs(ms - (this.orbitT || 0)) > 60e3) this.makeOrbit(ms);
+    if (app.sel >= 0 && ms < T.born[app.sel]) { this.orbitLine.visible = false; this.orbitFor = -2; }   // before its launch: gone at once
     const R = this.r;
     R.setRenderTarget(app.post.rt); R.setClearColor(0, 1); R.clear();
     R.render(this.bgScene, cam);

@@ -19,11 +19,14 @@ export class Tracker {
     // when each object first exists: its launch day, or later for pieces catalogued after a break-up (e.g. the 2009
     // Iridium-Cosmos collision debris carries its parents' 1990s launch dates). Catalogue numbers up to 69999 are given
     // in order, so an object can't have been catalogued before every lower-numbered object was launched. Objects with
-    // no launch date and an out-of-sequence number (unidentified analyst objects) count from the newest launch.
+    // no launch date and an out-of-sequence number (unidentified analyst objects) get a date drawn (fixed per object)
+    // from the dates of all the others, so going back in time they thin out like the rest of the population: few in the
+    // early years, most in the last ones.
     this.born = new Float64Array(N);
-    { let run = -Infinity, all = -Infinity; const L = objs.map(o => o.launch ? Date.parse(o.launch + 'T00:00:00Z') : NaN);
-      L.forEach(x => { if (x > all) all = x; });
-      objs.forEach((o, i) => { if (o.id < 70000 && L[i] > run) run = L[i]; this.born[i] = o.id < 70000 ? Math.max(run, L[i] || -Infinity) : (L[i] || all); }); }
+    { let run = -Infinity; const L = objs.map(o => o.launch ? Date.parse(o.launch + 'T00:00:00Z') : NaN), unknown = [];
+      objs.forEach((o, i) => { if (o.id < 70000 && L[i] > run) run = L[i]; if (o.id < 70000) this.born[i] = Math.max(run, L[i] || -Infinity); else if (L[i]) this.born[i] = L[i]; else unknown.push(i); });
+      const known = []; this.born.forEach((b, i) => { if (Number.isFinite(b) && !unknown.includes(i)) known.push(b); }); known.sort((a, b) => a - b);
+      for (const i of unknown) { let h = Math.imul(objs[i].id ^ 0x9e3779b9, 0x85ebca6b); h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35); h ^= h >>> 16; this.born[i] = known[Math.floor(((h >>> 0) / 4294967296) * known.length)]; } }
     this.seq = 0; this.pending = false; this.latency = 150;
     this.worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
     this.ready = new Promise(res => {

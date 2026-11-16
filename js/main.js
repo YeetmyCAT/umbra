@@ -167,6 +167,7 @@ function planetsTEME(ms) {
 // ---------- selection & info card ----------
 setTimeout(() => { app.select = select; app.setMode = setMode; app.ask = ask; });
 function select(i, center) {
+  if (i >= 0 && app.clock.now() < app.tracker.born[i]) return;   // not launched yet on this date: can't be picked
   const T = app.tracker; if (i !== app.sel) { app.ground.lockT = 0; app.companion = -1; } app.sel = i; T.select(i); app.ground.path = null;
   $('card').classList.toggle('hidden', i < 0); $('cMore').classList.add('hidden'); $('bMore').classList.remove('on');
   if (i >= 0 && app.ui.setMini && innerWidth < 640 && !app.ui.cardTouched) app.ui.setMini(true);   // phones: start compact
@@ -264,8 +265,8 @@ const obsMsg = () => ({ lat: app.place.lat, lon: app.place.lon, h: (app.place.h 
 async function flareSearch(kind) {
   const T = app.tracker, objs = T.objs, ms = app.clock.now();
   let list, hours;
-  if (kind === 'geo') { list = objs.filter(o => o.cls === 'geo' && o.type === 0 && o.n > 0.95 && o.n < 1.05 && o.ops !== '-' && o.ops !== 'D'); hours = 24; $('evInfo').textContent = 'GEO glints: sun-tracking arrays reflect sunlight back toward the anti-solar point; strongest within a few weeks of the equinoxes, just outside the Earth\'s shadow.'; }
-  else { list = objs.filter(o => o.type === 0 && o.ops !== '-' && o.ops !== 'D' && ['iss', 'css', 'hst', 'iridiumnext', ...($('eStar').checked ? ['starlink'] : []), 'gps', 'galileo', 'glonass', 'beidou', 'oneweb', 'bluebird', 'kuiper', 'qianfan'].includes(o.cls) && T.docked[o.idx] < 0); hours = 12; $('evInfo').textContent = 'Specular flares from flat surfaces (arrays, mirror radiators, antennas, rocket stages), from each object\'s shape and attitude model.'; }
+  if (kind === 'geo') { list = objs.filter(o => ms >= T.born[o.idx] && o.cls === 'geo' && o.type === 0 && o.n > 0.95 && o.n < 1.05 && o.ops !== '-' && o.ops !== 'D'); hours = 24; $('evInfo').textContent = 'GEO glints: sun-tracking arrays reflect sunlight back toward the anti-solar point; strongest within a few weeks of the equinoxes, just outside the Earth\'s shadow.'; }
+  else { list = objs.filter(o => o.type === 0 && ms >= T.born[o.idx] && o.ops !== '-' && o.ops !== 'D' && ['iss', 'css', 'hst', 'iridiumnext', ...($('eStar').checked ? ['starlink'] : []), 'gps', 'galileo', 'glonass', 'beidou', 'oneweb', 'bluebird', 'kuiper', 'qianfan'].includes(o.cls) && T.docked[o.idx] < 0); hours = 12; $('evInfo').textContent = 'Specular flares from flat surfaces (arrays, mirror radiators, antennas, rocket stages), from each object\'s shape and attitude model.'; }
   $('evList').innerHTML = '';
   startEvents();
   const m = await askEv({ cmd: 'flares', list: list.map(o => ({ idx: o.idx, meta: metaOf(o) })), obs: obsMsg(), t0: ms, hours, limit: 5.5 });
@@ -276,7 +277,7 @@ async function flareSearch(kind) {
 }
 async function transitSearch() {
   const T = app.tracker, ms = app.clock.now();
-  const list = T.objs.filter(o => o.cls === 'iss' || o.cls === 'css' || o.cls === 'hst' || o.idx === app.sel);
+  const list = T.objs.filter(o => (o.cls === 'iss' || o.cls === 'css' || o.cls === 'hst' || o.idx === app.sel) && ms >= T.born[o.idx]);
   $('evInfo').textContent = 'Searching for transits of the Sun, the Moon and the planets over 14 days…'; $('evList').innerHTML = '';
   startEvents();
   const m = await askEv({ cmd: 'transits', list: list.map(o => ({ idx: o.idx, meta: metaOf(o) })), obs: obsMsg(), t0: ms, days: 14 });
@@ -286,18 +287,19 @@ async function transitSearch() {
 }
 async function conjSearch() {
   const T = app.tracker, i = app.sel, ms = app.clock.now();
-  if (i < 0) { $('evInfo').textContent = 'Select a satellite first: conjunctions are searched for the selected object.'; $('evList').innerHTML = ''; return; }
+  if (i < 0 || ms < T.born[i]) { $('evInfo').textContent = 'Select a satellite first: conjunctions are searched for the selected object.'; $('evList').innerHTML = ''; return; }
   const o = T.objs[i];
   $('evInfo').textContent = `Searching ${o.name}'s passes in the next 24 h for objects crossing its line of sight…`; $('evList').innerHTML = '';
   startEvents();
   const m = await askEv({ cmd: 'conjunctions', idx: i, meta: metaOf(o), obs: obsMsg(), t0: ms, days: 1 });
+  m.list = m.list.filter(e => e.t >= T.born[e.idx]);   // only objects already launched
   $('evInfo').textContent = `${m.list.length} close approaches (under 0.4°) with ${o.name} over ${m.passes} passes. "Occultation" means the two discs overlap: one passes in front of the other.`;
   $('evList').innerHTML = m.list.map(e => { const ob = T.objs[e.idx]; return `<div class="item" data-i="${i}" data-t="${e.t}" data-c="${e.idx}"><span class="n">${esc(ob.name)} ${e.occult ? (e.front === 'other' ? 'passes in front of' : 'passes behind') : (e.front === 'other' ? 'passes just in front of' : 'passes just behind')} ${esc(o.name)}</span><span class="m">${e.sepArcsec < 120 ? e.sepArcsec.toFixed(0) + '″' : e.sepDeg.toFixed(2) + '°'}</span><span class="s">${fmtD(e.t)} ${fmtT(e.t)} · alt ${e.alt.toFixed(0)}° · ${e.occult ? 'discs overlap (occultation)' : 'close approach'} · ${esc(o.name)} ${e.r0.toFixed(0)} km away, ${esc(ob.name)} ${e.r1.toFixed(0)} km · sizes ${e.size0.toFixed(1)}″ / ${e.size1.toFixed(1)}″ · ${e.lit0 && e.lit1 ? 'both sunlit' : e.lit0 || e.lit1 ? 'one sunlit' : 'both in shadow'}</span></div>`; }).join('') || '<div class="note">None in the next 24 hours.</div>';
   bindEventItems();
 }
 async function brightPasses() {
   const T = app.tracker, ms = app.clock.now();
-  const list = T.objs.filter(o => o.type !== 2 && o.n > 6 && ((o.mag != null && o.mag < 3.0) || ['iss', 'css', 'hst'].includes(o.cls))).slice(0, 160);
+  const list = T.objs.filter(o => ms >= T.born[o.idx] && o.type !== 2 && o.n > 6 && ((o.mag != null && o.mag < 3.0) || ['iss', 'css', 'hst'].includes(o.cls))).slice(0, 160);
   $('evInfo').textContent = `Checking ${list.length} of the brightest objects for the next 2 days…`; $('evList').innerHTML = '';
   const out = [];
   startEvents(); const gen = evGen;
@@ -336,7 +338,8 @@ function visibleList() {
 function findList(q) {
   q = q.trim().toUpperCase(); if (!q) { $('findList').innerHTML = ''; return; }
   const T = app.tracker, out = [];
-  for (const o of T.objs) { if (String(o.id) === q || o.cospar === q || o.nameU.includes(q)) out.push(o); if (out.length > 150) break; }
+  const now = app.clock.now();
+  for (const o of T.objs) { if (now < T.born[o.idx]) continue; if (String(o.id) === q || o.cospar === q || o.nameU.includes(q)) out.push(o); if (out.length > 150) break; }
   out.sort((a, b) => (a.nameU.startsWith(q) ? 0 : 1) - (b.nameU.startsWith(q) ? 0 : 1));
   $('findList').innerHTML = out.map(o => `<div class="item" data-i="${o.idx}"><span class="n">${esc(o.name)}</span><span class="m dim">${o.id}</span><span class="s">${TYPES[o.type]} · ${esc(o.purpose)} · ${T.alt[o.idx] > 0 ? 'up now ' + T.alt[o.idx].toFixed(0) + '°' : 'below horizon'}</span></div>`).join('') || '<div class="note">No match.</div>';
 }
@@ -425,7 +428,7 @@ function timeDialog() {
   modal(`<h3>Date and time</h3><div class="rowf"><input type="datetime-local" id="dt" value="${loc}" step="60"></div>
     <div class="rowf"><button class="btn" data-j="-86400">−1 day</button><button class="btn" data-j="-3600">−1 h</button><button class="btn" data-j="3600">+1 h</button><button class="btn" data-j="86400">+1 day</button><button class="btn" data-j="604800">+1 week</button><button class="btn" id="dusk">Tonight at dusk</button></div>
     <div class="rowf"><button class="btn on" id="dok">Go</button><button class="btn" id="dnow">Now</button><button class="btn" id="dcancel">Cancel</button></div>
-    <div class="note">Times are shown in this device's time zone. Dates from 1 January 1957 (Sputnik 1 flew on 4 October 1957) to 10 years from now; each object appears from its launch. Predictions far from the elements' epoch get less certain (the info card shows the expected position error).</div>`);
+    <div class="note">Times are shown in this device's time zone. Dates from 1 January 1958 to 10 years from now; each object appears from its launch. Predictions far from the elements' epoch get less certain (the info card shows the expected position error).</div>`);
   $('sheet').querySelectorAll('[data-j]').forEach(b => b.onclick = () => { app.clock.set(app.clock.now() + +b.dataset.j * 1000); closeModal(); });
   $('dusk').onclick = () => { const A = window.Astronomy, ob = new A.Observer(app.place.lat, app.place.lon, app.place.h || 0); const t = A.SearchAltitude('Sun', ob, -1, new Date(app.clock.now() - 6 * 3600e3), 2, -8); if (t) app.clock.set(t.date.getTime()); closeModal(); };
   $('dok').onclick = () => { const v = $('dt').value; if (v) app.clock.set(new Date(v).getTime()); closeModal(); };
