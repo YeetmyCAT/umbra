@@ -209,7 +209,9 @@ export function makeEarth() {
           }
           // kR -> cd/m^2; seen against the night Earth from orbit it hardly shows, only above the limb (from inside or
           // below the layer it glows the same either side of the horizon, so no edge there)
-          ag *= 1.9e-4 * (ground ? mix(1.0, 0.08, smoothstep(112.0, 200.0, length(o) - R)) : 1.0);
+          // (rays that only just hit the Earth, within ~60 km of grazing, keep their glow: the band fades into the dark
+          // limb over about a degree instead of stopping at a hard edge)
+          ag *= 1.9e-4 * (ground ? mix(1.0, mix(0.08, 1.0, smoothstep(-60.0, 0.0, thR)), smoothstep(112.0, 200.0, length(o) - R)) : 1.0);
         }
         vec3 col = Ls + aur + ag;
         float alpha = 0.0;   // what lies behind is dimmed (and reddened) by the transmittance pass drawn before this one
