@@ -12,9 +12,13 @@ import * as THREE from '../vendor/three.module.min.js';
 const FSQ = new THREE.BufferGeometry();
 FSQ.setAttribute('position', new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
 
+const TEX = {};
 export function makeEarth() {
   const L = new THREE.TextureLoader();
-  const tex = (f, srgb) => { const t = L.load(f); t.colorSpace = THREE.NoColorSpace; t.wrapS = THREE.RepeatWrapping; t.anisotropy = 8; t.minFilter = THREE.LinearMipmapLinearFilter; return t; };
+  // 8192 x 4096 maps (~5 km per pixel) on computers; phones keep the 4096 ones (graphics memory). Loaded once and
+  // shared by the Satellite and Orbits views. Distant views use the GPU's own smaller mip levels automatically.
+  const big = (navigator.maxTouchPoints || 0) === 0 && Math.min(screen.width, screen.height) >= 700;
+  const tex = (f, srgb) => { f = big ? f.replace('.jpg', '-8k.jpg') : f; if (TEX[f]) return TEX[f]; const t = L.load(f); t.colorSpace = THREE.NoColorSpace; t.wrapS = THREE.RepeatWrapping; t.anisotropy = 8; t.minFilter = THREE.LinearMipmapLinearFilter; return (TEX[f] = t); };
   const aur = new THREE.DataTexture(new Uint8Array(360 * 181), 360, 181, THREE.RedFormat); aur.wrapS = THREE.RepeatWrapping; aur.magFilter = aur.minFilter = THREE.LinearFilter; aur.needsUpdate = true;
   const U = {
     uDay: { value: tex('data/earth-day.jpg') }, uNight: { value: tex('data/earth-lights.jpg') }, uAux: { value: tex('data/earth-aux.jpg') },
@@ -219,12 +223,12 @@ export function makeEarth() {
             glint += mE*Tmoon*F*min(exp(-tm2/s2)/(PI*s2*pow(nm2, 4.0))/(4.0*max(muv, 0.08)), 60.0)*smoothstep(-0.01, 0.06, mum);
             surf = mix(surf, surf*0.8 + glint*(1.0 - sh*0.8), water);
           }
-          // city lights (extracted from NASA Black Marble): ~4 cd/m^2 for a bright city core, dimmed and blurred by clouds
+          // city lights (NASA Black Marble): ~1.2 cd/m^2 for a bright city core (VIIRS ~300-400 nW/cm2/sr with a sodium/LED
+          // spectrum), suburbs a few tenths; dimmed and blurred by clouds
           float lt = pow(textureGrad(uNight, uv, gx, gy).r, 2.0);
-          // finer than the 10 km texture: street-grid speckle, fading out when the texels are small on screen
-          float fine = smoothstep(0.0, 1.0, 1.0 - 2000.0*length(gx));
-          lt *= mix(1.0, 0.25 + 1.5*vn(uv*vec2(36000.0, 18000.0))*vn(uv*vec2(9000.0, 4500.0) + 3.1), fine);
-          vec3 lights = vec3(lt)*vec3(1.0, 0.76, 0.45)*4.0*smoothstep(0.08, -0.12, mus);
+          // a soft glow around towns (light scattered in the air), instead of a grainy pattern
+          lt = 0.8*lt + 0.2*pow(textureGrad(uNight, uv, gx*6.0, gy*6.0).r, 2.0);
+          vec3 lights = vec3(lt)*vec3(1.0, 0.76, 0.45)*1.2*smoothstep(0.08, -0.12, mus);
           vec3 cloudCol = vec3(0.78)/PI*(Edir + sky*1.5) + lights*0.12;
           surf = mix(surf + lights, cloudCol, cl);
           col = Ls + aur + ag + T*surf*surfW;
