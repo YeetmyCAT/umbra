@@ -139,7 +139,7 @@ function loop() {
   if (app.mode === 'orbit') litAll(ms);
   if (now - lastPl > 2000) { lastPl = now; planetsTEME(ms); }
   if (app.mode === 'sky') { if (now - lastPath > Math.min(1000, Math.max(80, 20000 / Math.max(1, Math.abs(app.clock.rate)))) || app.clock.jumped) { lastPath = now; app.ground.updatePath(ms); } app.ground.frame(dt, ms, w, h, dpr); }
-  else if (app.mode === 'space') { if (!app.space.frame(dt, ms, w, h, dpr)) setMode('sky'); }
+  else if (app.mode === 'space') { if (!app.space.frame(dt, ms, w, h, dpr)) { if (app.space.why) toast(app.space.why); setMode('sky'); } }
   else app.orbit.frame(dt, ms, w, h, dpr);
   app.clock.jumped = false;
   // adaptive resolution: if frames stay slow (phones at 3x pixel density), render fewer pixels
@@ -344,6 +344,7 @@ function findList(q) {
 // ---------- UI ----------
 function setMode(m) {
   if (m === 'space' && app.sel < 0) { toast('Select a satellite first (tap it in the sky or pick one from the list)'); return; }
+  if (m === 'space') { const why = app.space.blocked(app.clock.now()); if (why) { toast(why); return; } }
   app.mode = m; document.querySelectorAll('#modeSeg button').forEach(b => b.classList.toggle('on', b.dataset.mode === m));
   $('gyroBtn').style.visibility = m === 'sky' ? 'visible' : 'hidden';
 }
@@ -424,7 +425,7 @@ function timeDialog() {
   modal(`<h3>Date and time</h3><div class="rowf"><input type="datetime-local" id="dt" value="${loc}" step="60"></div>
     <div class="rowf"><button class="btn" data-j="-86400">−1 day</button><button class="btn" data-j="-3600">−1 h</button><button class="btn" data-j="3600">+1 h</button><button class="btn" data-j="86400">+1 day</button><button class="btn" data-j="604800">+1 week</button><button class="btn" id="dusk">Tonight at dusk</button></div>
     <div class="rowf"><button class="btn on" id="dok">Go</button><button class="btn" id="dnow">Now</button><button class="btn" id="dcancel">Cancel</button></div>
-    <div class="note">Times are shown in this device's time zone. Any date works; predictions far from the elements' epoch get less certain (the info card shows the expected position error).</div>`);
+    <div class="note">Times are shown in this device's time zone. Dates from 1 January 1957 (Sputnik 1 flew on 4 October 1957) to 10 years from now; each object appears from its launch. Predictions far from the elements' epoch get less certain (the info card shows the expected position error).</div>`);
   $('sheet').querySelectorAll('[data-j]').forEach(b => b.onclick = () => { app.clock.set(app.clock.now() + +b.dataset.j * 1000); closeModal(); });
   $('dusk').onclick = () => { const A = window.Astronomy, ob = new A.Observer(app.place.lat, app.place.lon, app.place.h || 0); const t = A.SearchAltitude('Sun', ob, -1, new Date(app.clock.now() - 6 * 3600e3), 2, -8); if (t) app.clock.set(t.date.getTime()); closeModal(); };
   $('dok').onclick = () => { const v = $('dt').value; if (v) app.clock.set(new Date(v).getTime()); closeModal(); };

@@ -16,6 +16,14 @@ export class Tracker {
     this.dir = new Float32Array(N * 3); this.alt = new Float32Array(N); this.az = new Float32Array(N); this.range = new Float32Array(N);
     this.mag = new Float32Array(N).fill(99); this.light = new Float32Array(N * 3); this.lit = new Float32Array(N);
     this.std = new Float32Array(N); objs.forEach((o, i) => this.std[i] = stdMag(o));
+    // when each object first exists: its launch day, or later for pieces catalogued after a break-up (e.g. the 2009
+    // Iridium-Cosmos collision debris carries its parents' 1990s launch dates). Catalogue numbers up to 69999 are given
+    // in order, so an object can't have been catalogued before every lower-numbered object was launched. Objects with
+    // no launch date and an out-of-sequence number (unidentified analyst objects) count from the newest launch.
+    this.born = new Float64Array(N);
+    { let run = -Infinity, all = -Infinity; const L = objs.map(o => o.launch ? Date.parse(o.launch + 'T00:00:00Z') : NaN);
+      L.forEach(x => { if (x > all) all = x; });
+      objs.forEach((o, i) => { if (o.id < 70000 && L[i] > run) run = L[i]; this.born[i] = o.id < 70000 ? Math.max(run, L[i] || -Infinity) : (L[i] || all); }); }
     this.seq = 0; this.pending = false; this.latency = 150;
     this.worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
     this.ready = new Promise(res => {
@@ -25,7 +33,7 @@ export class Tracker {
         else if (m.cmd === 'prop') this.onProp(m);
       };
     });
-    this.worker.postMessage({ cmd: 'init', els: elementsArray(objs) });
+    this.worker.postMessage({ cmd: 'init', els: elementsArray(objs), born: this.born });
     this.sel = -1; this.selRec = null;
     this.shapes = new Array(N);
     this.ctx = {};
@@ -108,6 +116,8 @@ export class Tracker {
     }
     return true;
   }
+  // not there at the last update: not launched yet, or decayed (its position is not kept up to date)
+  gone(i) { return this.lastSim < this.born[i] || !this.seg || !this.seg.ok[i]; }
   shape(i) { return this.shapes[i] || (this.shapes[i] = shapeFor(this.objs[i])); }
   // Move everything to simMs and evaluate it for the observer. Light-weight for objects below the horizon.
   update(simMs, obs, opts = {}) {
@@ -126,6 +136,7 @@ export class Tracker {
       const k = i * 12;
       // well below the horizon and invisible: refresh every 4th frame only (it can't rise that fast)
       if (lazy && this.alt[i] < -15 && ((i & 3) !== fq) && i !== this.sel) continue;
+      if (simMs < this.born[i]) { this.alt[i] = -90; this.mag[i] = 99; continue; }   // not launched yet
       if (i === this.sel && this.selRec && this.selState(simMs, st)) {
         r[0] = st[0]; r[1] = st[1]; r[2] = st[2]; v[0] = st[3]; v[1] = st[4]; v[2] = st[5];
       } else {

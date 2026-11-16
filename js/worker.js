@@ -8,7 +8,7 @@ import { obsAt, look, extinction } from './sight.js';
 import { shapeFor } from './shapes.js';
 import { sunlight as sunlightFn } from './light.js';
 
-let recs = [], meta = [];
+let recs = [], meta = [], born = null;
 const st = new Float64Array(6);
 onmessage = e => {
   const m = e.data;
@@ -19,7 +19,7 @@ onmessage = e => {
       try { recs[i] = ommToSatrec({ epoch: E[k], n: E[k + 1], e: E[k + 2], i: E[k + 3], raan: E[k + 4], argp: E[k + 5], M: E[k + 6], bstar: E[k + 7], ndot: E[k + 8] }); }
       catch { recs[i] = null; }
     }
-    meta = m.meta || [];
+    meta = m.meta || []; born = m.born || null;
     postMessage({ cmd: 'ready', n: N });
   } else if (m.cmd === 'update') {   // fresher elements for some objects (live CelesTrak refresh)
     for (const u of m.list) { try { recs[u.idx] = ommToSatrec(u.el); } catch { } }
@@ -27,7 +27,7 @@ onmessage = e => {
     // exact states at both ends of the segment [t, t2] (double precision: float32 was ~0.5 m of noise)
     const N = recs.length, t2 = m.t2 ?? m.t, buf = m.recycle && m.recycle.length === N * 12 ? m.recycle : new Float64Array(N * 12), ok = new Uint8Array(N);
     for (let i = 0; i < N; i++) {
-      const r = recs[i]; if (!r) continue;
+      const r = recs[i]; if (!r || (born && Math.max(m.t, t2) < born[i])) continue;   // not launched yet: nothing to compute
       if (!propagate(r, m.t, st)) continue;
       for (let j = 0; j < 6; j++) buf[i * 12 + j] = st[j];
       if (t2 === m.t) { for (let j = 0; j < 6; j++) buf[i * 12 + 6 + j] = st[j]; ok[i] = 1; }

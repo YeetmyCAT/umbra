@@ -114,14 +114,14 @@ export class OrbitView {
     const g = this.pts.geometry, P = g.attributes.position.array, Lt = g.attributes.lit.array, S = g.attributes.show.array, f = app.filter;
     for (let i = 0; i < T.N; i++) {
       P[i * 3] = T.pos[i * 3]; P[i * 3 + 1] = T.pos[i * 3 + 1]; P[i * 3 + 2] = T.pos[i * 3 + 2];
-      // decayed (orbit no longer computable) or below 78 km: burned up, not shown (it used to sit frozen in place)
-      const gone = (T.seg && !T.seg.ok[i]) || P[i * 3] * P[i * 3] + P[i * 3 + 1] * P[i * 3 + 1] + P[i * 3 + 2] * P[i * 3 + 2] < 6449 * 6449;
+      // not launched yet, decayed (orbit no longer computable) or below 78 km: not shown (it used to sit frozen in place)
+      const gone = T.gone(i) || P[i * 3] * P[i * 3] + P[i * 3 + 1] * P[i * 3 + 1] + P[i * 3 + 2] * P[i * 3 + 2] < 6449 * 6449;
       Lt[i] = T.litAll ? T.litAll[i] : 1; S[i] = gone || (f && !f(i)) ? 0 : 1;
     }
     g.attributes.position.needsUpdate = true; g.attributes.lit.needsUpdate = true; g.attributes.show.needsUpdate = true;
     this.ptsU.uCam.value.copy(cam.position); this.ptsU.uSize.value = clamp(2.2 * dpr * Math.sqrt(42000 / this.dist), 1.5 * dpr, 6 * dpr);
     const sc = this.dist / 900;
-    if (app.sel >= 0) { this.selMark.visible = true; this.selMark.position.set(T.pos[app.sel * 3], T.pos[app.sel * 3 + 1], T.pos[app.sel * 3 + 2]); this.selMark.scale.setScalar(sc * 2.2); } else this.selMark.visible = false;
+    if (app.sel >= 0 && !T.gone(app.sel)) { this.selMark.visible = true; this.selMark.position.set(T.pos[app.sel * 3], T.pos[app.sel * 3 + 1], T.pos[app.sel * 3 + 2]); this.selMark.scale.setScalar(sc * 2.2); } else this.selMark.visible = false;
     this.obsMark.position.set(...ecefToTeme(app.obs.pos, gmst(ms))); this.obsMark.scale.setScalar(sc * 1.6);
     if (app.sel !== this.orbitFor || Math.abs(ms - (this.orbitT || 0)) > 60e3) this.makeOrbit(ms);
     const R = this.r;
@@ -154,7 +154,7 @@ export class OrbitView {
   }
   makeOrbit(ms) {
     const T = this.app.tracker, i = this.app.sel; this.orbitFor = i; this.orbitT = ms;
-    if (i < 0 || !T.selRec) { this.orbitLine.visible = false; return; }
+    if (i < 0 || !T.selRec || ms < T.born[i]) { this.orbitLine.visible = false; return; }
     const st = new Float64Array(6), pts = [], per = 1440 / T.objs[i].n * 60e3;
     for (let k = 0; k <= 240; k++) if (propagate(T.selRec, ms + per * (k / 240 - 0.5), st)) pts.push(st[0], st[1], st[2]);
     this.orbitLine.geometry.dispose(); this.orbitLine.geometry = new THREE.BufferGeometry(); this.orbitLine.geometry.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3)); this.orbitLine.visible = true;
@@ -162,7 +162,7 @@ export class OrbitView {
   pick(x, y, w, h) {
     const T = this.app.tracker, v = new THREE.Vector3(); let best = -1, bd = 18;
     for (let i = 0; i < T.N; i++) {
-      if (this.app.filter && !this.app.filter(i)) continue;
+      if ((this.app.filter && !this.app.filter(i)) || T.gone(i)) continue;
       const px = T.pos[i * 3], py = T.pos[i * 3 + 1], pz = T.pos[i * 3 + 2];
       // hidden behind the Earth from the camera: not pickable (the dot isn't drawn either)
       const cp = this.cam.position, dx = px - cp.x, dy = py - cp.y, dz = pz - cp.z, L = Math.hypot(dx, dy, dz);

@@ -43,6 +43,13 @@ export function makeEarth() {
       const float bM = 3.0e-3, bMe = 3.6e-3;
       vec2 sph(vec3 o, vec3 d, float r){ float b = dot(o, d), c = dot(o, o) - r*r, h = b*b - c; if (h < 0.0) return vec2(1e9, -1e9); h = sqrt(h); return vec2(-b - h, -b + h); }
       float hash(vec2 p){ vec3 p3 = fract(vec3(p.xyx)*0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y)*p3.z); }
+      // a Gaussian layer exp(-((h - c)/w)^2) integrated over one step of length dt along which the height goes from ha to
+      // hb (linearly): exact for any step size, so a thin layer never falls between samples (no stripes or edges)
+      float erfA(float x){ float x2 = x*x; return sign(x)*sqrt(1.0 - exp(-x2*(1.2732395 + 0.147*x2)/(1.0 + 0.147*x2))); }
+      float layerStep(float ha, float hb, float c, float w, float dt){
+        float dh = hb - ha; if (abs(dh) < 0.05*w) return exp(-pow((0.5*(ha + hb) - c)/w, 2.0))*dt;
+        return 0.8862269*w*(erfA((hb - c)/w) - erfA((ha - c)/w))/dh*dt;
+      }
       float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0 - 2.0*f); return mix(mix(hash(i), hash(i + vec2(1,0)), f.x), mix(hash(i + vec2(0,1)), hash(i + vec2(1,1)), f.x), f.y); }
       // Chapman optical-depth function (Schuler): column in scale heights from radius-ratio X, height h (both / H)
       float chap(float X, float h, float mu){
@@ -138,7 +145,8 @@ export function makeEarth() {
         vec3 aur = vec3(0.0);
         if (uAurOn > 0.5) {
           vec2 ah = sph(o, d, R + 320.0), al = sph(o, d, R + 95.0);
-          float a0 = max(ah.x, 0.0), a1 = ah.y; if (ground) a1 = min(a1, al.x > 0.0 ? al.x : a1);
+          float a0 = max(ah.x, 0.0), a1 = ah.y; if (ground) a1 = min(a1, al.x > 0.0 ? al.x : tg.x);   // never past the ground
+          if (dot(o, o) < (R + 95.0)*(R + 95.0)) a0 = max(a0, al.y);   // from below the curtains: they start where the ray rises past 95 km
           if (a1 > a0 && ah.x < 1e8) {
             float dt = (a1 - a0)/24.0;
             for (int i = 0; i < 24; i++) {
@@ -171,21 +179,22 @@ export function makeEarth() {
         // seen as a thin band along the night limb; weak gravity-wave banding. Volume emission integrated along the ray.
         vec3 ag = vec3(0.0);
         {
-          float jit = 0.5;   // evenly spaced samples: a per-pixel random offset showed as a fixed grain
           // green: only where the ray is inside the 80-112 km shell (one or two segments)
           vec2 so = sph(o, d, R + 112.0), si = sph(o, d, R + 80.0);
           if (so.x < 1e8 && so.y > 0.0) {
             float tEnd = ground ? tg.x : so.y;
+            // the ray outside the 80 km sphere, in front of the camera: before it enters that sphere, and after it leaves
+            float inA = si.x < 1e8 ? si.x : 1e9, inB = si.x < 1e8 ? si.y : 1e9;
             for (int sgm = 0; sgm < 2; sgm++) {
-              float s0 = sgm == 0 ? max(so.x, 0.0) : (si.x < 1e8 ? si.y : 1e9);
-              float s1 = sgm == 0 ? (si.x < 1e8 && si.x > 0.0 ? si.x : tEnd) : tEnd;
+              float s0 = sgm == 0 ? max(so.x, 0.0) : max(inB, max(so.x, 0.0));
+              float s1 = sgm == 0 ? min(tEnd, inA) : tEnd;
               if (s1 <= s0) continue;
               float dt = (s1 - s0)/24.0;
               for (int i = 0; i < 24; i++) {
-                vec3 p = o + d*(s0 + (float(i) + jit)*dt); float h = length(p) - R;
+                float ta = s0 + float(i)*dt; vec3 p = o + d*(ta + 0.5*dt);
                 vec3 e = ecef(normalize(p));
                 float wav = 0.85 + 0.3*vn(vec2(atan(e.y, e.x)*180.0 + uTime*0.0004, asin(e.z)*90.0));
-                ag += vec3(0.45, 1.0, 0.35)*exp(-pow((h - 95.0)/4.5, 2.0))*(0.25/8.0)*wav*dt;   // ~250 R overhead
+                ag += vec3(0.45, 1.0, 0.35)*layerStep(length(o + d*ta) - R, length(o + d*(ta + dt)) - R, 95.0, 4.5, dt)*(0.25/8.0)*wav;   // ~250 R overhead
               }
             }
           }
@@ -193,9 +202,11 @@ export function makeEarth() {
           vec2 sr = sph(o, d, R + 330.0);
           if (sr.x < 1e8 && sr.y > 0.0) {
             float r0 = max(sr.x, 0.0), r1 = ground ? tg.x : sr.y, dt = (r1 - r0)/16.0;
-            for (int i = 0; i < 16; i++) { float h = length(o + d*(r0 + (float(i) + jit)*dt)) - R; ag += vec3(1.0, 0.22, 0.18)*exp(-pow((h - 250.0)/45.0, 2.0))*(0.06/80.0)*dt; }
+            for (int i = 0; i < 16; i++) { float ta = r0 + float(i)*dt; ag += vec3(1.0, 0.22, 0.18)*layerStep(length(o + d*ta) - R, length(o + d*(ta + dt)) - R, 250.0, 45.0, dt)*(0.06/80.0); }
           }
-          ag *= 1.9e-4 * (ground ? 0.08 : 1.0);   // kR -> cd/m^2; seen against the night Earth it hardly shows, only above the limb
+          // kR -> cd/m^2; seen against the night Earth from orbit it hardly shows, only above the limb (from inside or
+          // below the layer it glows the same either side of the horizon, so no edge there)
+          ag *= 1.9e-4 * (ground ? mix(1.0, 0.08, smoothstep(112.0, 200.0, length(o) - R)) : 1.0);
         }
         vec3 col = Ls + aur + ag;
         float alpha = 1.0 - dot(T, vec3(0.3333));

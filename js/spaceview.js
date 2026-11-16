@@ -7,7 +7,7 @@ import { makeStars, makeMoon, makePlanets, milkyWayPhoto, makeFaintStars, starMa
 import { SOLAR_GLSL, sunMoonTEME, sunCovered, lunarShadow, setEarthEclipse, litCentroid, starEclipse } from './eclipse.js';
 import { buildModel, poseModel, disposeModel } from './models3d.js';
 import { gmst, sunTEME, moonTEME, DEG } from './frames.js';
-import { propagate } from './sgp.js';
+import { propagate, decayTime } from './sgp.js';
 import { sunlight, earthshine, bodyFrame, facetsIntensity, magFromI, spherePhase } from './light.js';
 import { EQ2GAL } from './astro.js';
 import { moonGain } from './groundview.js';
@@ -84,15 +84,14 @@ export class SpaceView {
     if (i < 0) return false;
     // exact state of the satellite
     const st = new Float64Array(6);
-    // re-entry: SGP4 stops once the orbit has decayed. Keep the last good state, show the satellite burning up (orange
-    // plasma from ~120 km) and gone below 78 km, where re-entering debris typically breaks up and burns away
+    // re-entry: orange plasma from ~120 km; below 78 km (where re-entering debris typically breaks up and burns away)
+    // the orbit ends. The view then stays where it burned up for 20 minutes of simulated time, and then closes.
+    this.why = this.blocked(ms); if (this.why) return false;
     const okState = !!(T.selRec && T.selState(ms, st));
-    if (okState) { this.lastSt = st.slice(); this.lastSel = i; }
-    else if (this.lastSel === i && this.lastSt) st.set(this.lastSt);
-    else return false;
+    if (!okState && !T.selState(this.burnT - 1000, st)) return false;
     const r = [st[0], st[1], st[2]], v = [st[3], st[4], st[5]];
     const hKm = Math.hypot(r[0], r[1], r[2]) - 6371;
-    this.gone = !okState || hKm < 78; this.burn = this.gone ? 0 : Math.min(1, Math.max(0, (120 - hKm) / 42));
+    this.gone = !okState; this.burn = this.gone ? 0 : Math.min(1, Math.max(0, (120 - hKm) / 42));
     const rv = new THREE.Vector3(...r), up = rv.clone().normalize(), vel = new THREE.Vector3(...v);
     const fwd = vel.clone().addScaledVector(up, -vel.dot(up)).normalize(), right = fwd.clone().cross(up);
     // precise Sun and Moon (astronomy-engine): eclipses and the Moon's shadow on the Earth fall in the right place
@@ -195,7 +194,11 @@ export class SpaceView {
       const pf = this.burn || 0; this.plasma.visible = pf > 0.001;
       if (this.plasma.visible) {
         if (this.plasmaFor !== this.model) { this.plasmaFor = this.model; const bs = new THREE.Box3().setFromObject(this.model).getBoundingSphere(new THREE.Sphere()); this.plasmaR = bs.radius || this.shape.size * 0.5; }
-        const L = 3.0 * pf * pf; this.plasma.material.color.setRGB(1.0 * L, 0.45 * L, 0.12 * L); this.plasma.scale.setScalar(this.plasmaR * (2.2 + 1.2 * pf)); this.plasma.position.set(0, 0, 0);
+        // the glow sits just behind the whole model (as seen from the camera), so it never covers any part of it
+        const off = this.plasmaR * 1.05, k = (this.dist + off) / this.dist;
+        const L = 3.0 * pf * pf; this.plasma.material.color.setRGB(1.0 * L, 0.45 * L, 0.12 * L); this.plasma.scale.setScalar(this.plasmaR * (2.2 + 1.2 * pf) * k);
+        this.plasma.position.copy(cam.position).normalize().multiplyScalar(-off);
+        if (cam.far < this.dist + off * 1.02) { cam.far = this.dist + off * 1.02; cam.updateProjectionMatrix(); }
       }
     }
     // other satellites near this one (within 3000 km), with their brightness as seen from here
@@ -235,6 +238,17 @@ export class SpaceView {
     this.drawOverlay(w, h, ms, r, v, up, skyCam);
     return true;
   }
+  // why the selected object can't be shown from here at ms (null if it can)
+  blocked(ms) {
+    const T = this.app.tracker, i = T.sel, rec = T.selRec;
+    if (i < 0 || !rec) return null;
+    const name = T.objs[i].name;
+    if (ms < T.born[i]) return `${name} had not been launched yet on this date`;
+    if (propagate(rec, ms, new Float64Array(6))) return null;
+    if (this.burnFor !== rec) { this.burnFor = rec; this.burnT = decayTime(rec, ms); }
+    if (this.burnT == null || ms < this.burnT || ms > this.burnT + 1200e3) return `${name} has burned up on reentry`;
+    return null;
+  }
   measure() {
     const R = this.r, o = R.getRenderTarget(), E = this.earth.U, ex = E.uExposure.value;
     E.uExposure.value = 1; E.uSteps.value = 8;
@@ -256,7 +270,7 @@ export class SpaceView {
     const T = this.app.tracker, g = this.others.geometry, P = g.attributes.position.array, M = g.attributes.mag.array, C = g.attributes.color.array;
     let k = 0; const self = this.app.sel, L = [1, 1, 1];
     for (let i = 0; i < T.N && k < this.MAX; i++) {
-      if (i === self) continue;
+      if (i === self || T.gone(i)) continue;
       const dx = T.pos[i * 3] - rv.x, dy = T.pos[i * 3 + 1] - rv.y, dz = T.pos[i * 3 + 2] - rv.z, d2 = dx * dx + dy * dy + dz * dz;
       // nothing within 25 km: that is a docked vehicle or a co-moving object whose own (older) elements put it a few
       // km off, which would blow up as a giant white disc from the inverse-square law
